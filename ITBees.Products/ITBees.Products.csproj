@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    </PropertyGroup>
+
+        <ItemGroup>
+            <PackageReference Include="ITBees.Models" Version="8.0.95" />
+            <PackageReference Include="ITBees.RestfulApiControllers" Version="8.0.31" />
+            <PackageReference Include="ITBees.UserManager" Version="8.0.401" />
+            <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.10" />
+            <PackageReference Include="ITBees.Interfaces" Version="8.0.72" />
+            <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+        </ItemGroup>
+
+<!--    <ItemGroup>-->
+<!--        <ProjectReference Include="..\..\ITBees.Models\ITBees.Models\ITBees.Models.csproj"/>-->
+<!--        <ProjectReference Include="..\..\ITBees.RestfulApiControllers\ITBees.RestfulApiControllers\ITBees.RestfulApiControllers.csproj"/>-->
+<!--        <ProjectReference Include="..\..\ITBees.UserManager\ITBees.UserManager\ITBees.UserManager.csproj" />-->
+<!--        <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.10" />-->
+<!--    </ItemGroup>-->
+</Project>
