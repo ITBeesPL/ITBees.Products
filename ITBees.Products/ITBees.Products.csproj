@@ -11,7 +11,7 @@
         <ItemGroup>
             <PackageReference Include="ITBees.Models" Version="8.0.95" />
             <PackageReference Include="ITBees.RestfulApiControllers" Version="8.0.31" />
-            <PackageReference Include="ITBees.UserManager" Version="8.0.404" />
+            <PackageReference Include="ITBees.UserManager" Version="8.0.405" />
             <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.10" />
             <PackageReference Include="ITBees.Interfaces" Version="8.0.72" />
             <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
