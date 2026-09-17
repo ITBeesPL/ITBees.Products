@@ -5,8 +5,9 @@ namespace ITBees.Products.Services.Labels;
 
 /// <summary>
 /// Warehouse label, 50 x 30 mm: a QR code on the left and, next to it, the last characters of
-/// our internal serial number, the last characters of the manufacturer serial number and the
-/// purchase date. One label per PDF page, the page being exactly the label - no margins.
+/// our internal serial number, the last characters of the manufacturer serial number and -
+/// when the label data carries one - the purchase date. One label per PDF page, the page being
+/// exactly the label - no margins.
 /// </summary>
 public class StockLabelPdfGenerator : IStockLabelPdfGenerator
 {

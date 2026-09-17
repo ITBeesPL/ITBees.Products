@@ -15,7 +15,8 @@ ITBees.Inpost / ITBees.ServerStatus): encje, serwisy i kontrolery
   każde urządzenie oprócz numeru seryjnego producenta dostaje **nasz numer** (`Guid`),
 - **etykiet magazynowych** - `/StockLabels?productDeliveryGuid=` albo `?guid=` - PDF, jedna
   strona = jedna etykieta **50 × 30 mm** (bez marginesów, w kolejności skanowania): kod QR oraz
-  ostatnie 6 znaków naszego guida, ostatnie 4 znaki numeru seryjnego producenta i data zakupu.
+  ostatnie 6 znaków naszego guida i ostatnie 4 znaki numeru seryjnego producenta; opcjonalnie
+  (`PrintPurchaseDateOnLabels`, domyślnie wyłączone) także data zakupu.
 
 Encje `SimCard` / `SimCardOperator` służą hostom, które wydają urządzenia z kartami SIM.
 
@@ -28,7 +29,11 @@ new ITBees.Products.Setup.ProductsSetup().Register(builder.Services, new Product
     // Strona panelu ze szczegółami urządzenia - do adresu doklejany jest guid urządzenia
     // (albo podstawiany w miejsce "{guid}", np. "https://host/device?id={guid}").
     // To właśnie ten link trafia do kodu QR etykiety. Bez adresu QR zawiera sam guid.
-    DeviceWarehouseUrl = configuration["DeviceWarehouseUrl"]
+    DeviceWarehouseUrl = configuration["DeviceWarehouseUrl"],
+
+    // Trzeci wiersz etykiety z datą zakupu. Domyślnie false - etykieta pokazuje tylko
+    // końcówkę naszego guida i końcówkę numeru seryjnego.
+    PrintPurchaseDateOnLabels = false
 });
 
 // DbContext.OnModelCreating:

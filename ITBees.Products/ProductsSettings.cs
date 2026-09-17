@@ -17,6 +17,13 @@ public class ProductsSettings
     /// </summary>
     public string? DeviceWarehouseUrl { get; set; }
 
+    /// <summary>
+    /// Prints the purchase date on warehouse labels, as a third line under the internal id and
+    /// the serial number. Off by default - the label then shows those two only; the date stays
+    /// available in the device details the label's QR code leads to.
+    /// </summary>
+    public bool PrintPurchaseDateOnLabels { get; set; }
+
     /// <summary>Link to the device details page, or null when no address is configured.</summary>
     public string? BuildDeviceUrl(Guid deviceGuid)
     {

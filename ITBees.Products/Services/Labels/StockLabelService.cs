@@ -75,7 +75,8 @@ public class StockLabelService : IStockLabelService
         {
             DeviceGuid = deviceGuid,
             SerialNumber = item.SerialNumber,
-            PurchaseDate = purchaseDate,
+            // The generator prints the date line only when it is handed a date.
+            PurchaseDate = _settings.PrintPurchaseDateOnLabels ? purchaseDate : null,
             QrContent = _settings.BuildLabelQrContent(deviceGuid)
         };
     }

@@ -18,7 +18,8 @@ public class ProductsSetup
     /// </summary>
     /// <param name="settings">
     /// Pass <see cref="ProductsSettings.DeviceWarehouseUrl"/> to make the label QR codes open
-    /// the device details page; without it they carry the bare device guid.
+    /// the device details page; without it they carry the bare device guid. Labels show the
+    /// purchase date only with <see cref="ProductsSettings.PrintPurchaseDateOnLabels"/> set.
     /// </param>
     public void Register(IServiceCollection services, ProductsSettings? settings = null)
     {

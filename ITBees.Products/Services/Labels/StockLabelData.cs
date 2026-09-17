@@ -9,6 +9,10 @@ public class StockLabelData
     /// <summary>Manufacturer serial number - the label prints its last characters.</summary>
     public string SerialNumber { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Printed as the last line; null leaves the line out. <see cref="StockLabelService"/> fills
+    /// it only when <see cref="ProductsSettings.PrintPurchaseDateOnLabels"/> is on.
+    /// </summary>
     public DateTime? PurchaseDate { get; set; }
 
     /// <summary>Text encoded in the QR code - see <see cref="ProductsSettings.BuildLabelQrContent"/>.</summary>
