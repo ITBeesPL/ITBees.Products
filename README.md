@@ -11,6 +11,11 @@ ITBees.Inpost / ITBees.ServerStatus): encje, serwisy i kontrolery
   partia zakupowa = dane zakupu wspólne dla całej paczki (data zakupu, numer faktury, sprzedawca
   z NIP-em, okres gwarancji w miesiącach, magazyn) + zeskanowane numery seryjne w kolejności
   skanowania; zapis jest atomowy - jeden odrzucony numer odrzuca całą dostawę,
+- **podpowiedzi sprzedawców** - `/ProductDeliverySellers?search=&limit=`: sprzedawcy zapamiętani
+  z wcześniejszych dostaw (jeden wpis na parę nazwa + NIP, z danymi z ostatnio wprowadzonej
+  dostawy; bez `search` - ostatnio używani). Sprzedawca nie jest osobną encją, więc nie ma tu
+  tabeli ani migracji - a formularz zakupu może podpowiedzieć dostawcę bez NIP-u (np. z Chin),
+  którego nie da się pobrać z GUS,
 - **urządzeń na stanie** - `/SerializedProduct` (GET/PUT po guid), `/SerializedProducts` (lista):
   każde urządzenie oprócz numeru seryjnego producenta dostaje **nasz numer** (`Guid`),
 - **etykiet magazynowych** - `/StockLabels?productDeliveryGuid=` albo `?guid=` - PDF, jedna

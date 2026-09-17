@@ -12,6 +12,8 @@ public class ProductDeliveryService : IProductDeliveryService
     private const int MaxItemsPerDelivery = 500;
     private const int MaxSerialNumberLength = 200;
     private const int MaxWarrantyMonths = 240;
+    private const int DefaultSellerSuggestions = 20;
+    private const int MaxSellerSuggestions = 100;
 
     private readonly IAspCurrentUserService _aspCurrentUserService;
     private readonly IReadOnlyRepository<ProductDelivery> _deliveryRoRepo;
@@ -71,6 +73,43 @@ public class ProductDeliveryService : IProductDeliveryService
                      x.Items.Any(i => i.SerialNumber.ToLower().Contains(search))),
                 sortOptions, x => x.Warehouse, x => x.Items)
             .MapTo(x => new ProductDeliveryVm(x, x.Items?.Count ?? 0));
+    }
+
+    public List<ProductDeliverySellerVm> GetSellers(string? search, int? limit)
+    {
+        _aspCurrentUserService.ThrowIfNotPlatformOperator();
+
+        search = string.IsNullOrWhiteSpace(search) ? null : search.Trim().ToLower();
+        var searchKey = search == null ? null : SellerNameKey(search);
+        var take = Math.Clamp(limit ?? DefaultSellerSuggestions, 1, MaxSellerSuggestions);
+
+        // Sellers live only inside the deliveries, and a delivery is one purchase - there are
+        // few of them, so the matching ones are simply grouped in memory.
+        var deliveries = _deliveryRoRepo.GetData(x =>
+            x.SellerName != null &&
+            (search == null ||
+             x.SellerName.ToLower().Contains(search) ||
+             (x.SellerNip != null && x.SellerNip.ToLower().Contains(search))));
+
+        return deliveries
+            .Where(x => !string.IsNullOrWhiteSpace(x.SellerName))
+            .GroupBy(x => (Name: SellerNameKey(x.SellerName!), Nip: x.SellerNip ?? string.Empty))
+            .Select(group => new
+            {
+                Latest = group.OrderByDescending(x => x.Created).ThenByDescending(x => x.PurchaseDate).First(),
+                DeliveriesCount = group.Count(),
+                LastPurchaseDate = group.Max(x => x.PurchaseDate)
+            })
+            // Names starting with the typed text come first, then the most recently used sellers.
+            .OrderBy(x => searchKey == null ||
+                          SellerNameKey(x.Latest.SellerName!).StartsWith(searchKey, StringComparison.Ordinal)
+                ? 0
+                : 1)
+            .ThenByDescending(x => x.Latest.Created)
+            .ThenBy(x => x.Latest.SellerName, StringComparer.OrdinalIgnoreCase)
+            .Take(take)
+            .Select(x => new ProductDeliverySellerVm(x.Latest, x.DeliveriesCount, x.LastPurchaseDate))
+            .ToList();
     }
 
     public ProductDeliveryVm Create(ProductDeliveryIm productDeliveryIm)
@@ -315,6 +354,16 @@ public class ProductDeliveryService : IProductDeliveryService
     {
         var trimmed = value?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    /// <summary>
+    /// What makes two typed seller names the same seller: letter case and the amount of
+    /// whitespace do not count.
+    /// </summary>
+    private static string SellerNameKey(string sellerName)
+    {
+        return string.Join(' ', sellerName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .ToUpperInvariant();
     }
 
     /// <summary>Keeps only the digits of a Polish NIP; anything else (e.g. a foreign VAT id) stays as typed.</summary>
