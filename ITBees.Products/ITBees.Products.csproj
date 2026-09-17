@@ -5,16 +5,18 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-        <Version>8.0.2</Version>
+        <Version>8.0.3</Version>
     </PropertyGroup>
 
         <ItemGroup>
             <PackageReference Include="ITBees.Models" Version="8.0.95" />
             <PackageReference Include="ITBees.RestfulApiControllers" Version="8.0.31" />
-            <PackageReference Include="ITBees.UserManager" Version="8.0.401" />
+            <PackageReference Include="ITBees.UserManager" Version="8.0.404" />
             <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.10" />
             <PackageReference Include="ITBees.Interfaces" Version="8.0.72" />
             <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+            <!-- QR matrix for the warehouse stock labels (Services/Labels). -->
+            <PackageReference Include="ZXing.Net" Version="0.16.10" />
         </ItemGroup>
 
 <!--    <ItemGroup>-->

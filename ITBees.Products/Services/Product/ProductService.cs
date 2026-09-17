@@ -52,19 +52,21 @@ public class ProductService : IProductService
             throw new FasApiErrorException(new FasApiErrorVm(message, StatusCodes.Status403Forbidden));  
         }
         
+        // Thumbnail, descriptions and EAN are optional in the request, but their columns are
+        // not nullable - store an empty text instead of failing on a missing value.
         var newProduct = _productWoRepo.InsertData(new DbModels.Product()
         {
             ProducerId = productIm.ProducerId,
-            ThumbnailUrl = productIm.Thumbnail.ImageUrl,
-            ShortDescription = productIm.ShortDescription,
-            LongDescription = productIm.LongDescription,
+            ThumbnailUrl = productIm.Thumbnail?.ImageUrl ?? string.Empty,
+            ShortDescription = productIm.ShortDescription ?? string.Empty,
+            LongDescription = productIm.LongDescription ?? string.Empty,
             Created = DateTime.UtcNow,
             IsActive = true,
             NetPriceSell = productIm.NetPriceSell,
             VatPercentageSell = productIm.VatPercentageSell,
             NetPriceBuy = productIm.NetPriceBuy,
             VatPercentageBuy = productIm.VatPercentageBuy,
-            Ean = productIm.Ean,
+            Ean = productIm.Ean ?? string.Empty,
             AddedByGuid = cu.CurrentUserGuid.Value,
             ProductImages = productIm.ProductImages?.Select(pi => new ProductImage()
             {
@@ -91,17 +93,24 @@ public class ProductService : IProductService
             throw new FasApiErrorException("Producer not found", 404);
         }
         
+        // The images are loaded together with the product: replacing them below needs the
+        // collection to exist (it is null otherwise) and the old rows to be tracked for removal.
         var updatedProduct = _productWoRepo.UpdateData(x => x.Id == productUm.ProductId, x =>
         {
             x.ProducerId = productUm.ProducerId;
-            x.ThumbnailUrl = productUm.Thumbnail.ImageUrl;
-            x.ShortDescription = productUm.ShortDescription;
-            x.LongDescription = productUm.LongDescription;
+            // A missing thumbnail means "leave it as it is", not "clear it".
+            if (productUm.Thumbnail != null)
+            {
+                x.ThumbnailUrl = productUm.Thumbnail.ImageUrl ?? string.Empty;
+            }
+
+            x.ShortDescription = productUm.ShortDescription ?? string.Empty;
+            x.LongDescription = productUm.LongDescription ?? string.Empty;
             x.NetPriceSell = productUm.NetPriceSell;
             x.VatPercentageSell = productUm.VatPercentageSell;
             x.NetPriceBuy = productUm.NetPriceBuy;
             x.VatPercentageBuy = productUm.VatPercentageBuy;
-            x.Ean = productUm.Ean;
+            x.Ean = productUm.Ean ?? string.Empty;
             if (productUm.ProductImages != null)
             {
                 x.ProductImages.Clear();
@@ -113,7 +122,7 @@ public class ProductService : IProductService
                     });
                 }
             }
-        }).FirstOrDefault();
+        }, x => x.ProductImages).FirstOrDefault();
         
         return new ProductVm(updatedProduct);
     }
