@@ -21,4 +21,10 @@ public class ProductUm
     public int VatPercentageSell { get; set; }
     public decimal NetPriceBuy { get; set; }
     public int VatPercentageBuy { get; set; }
+
+    /// <summary>
+    /// Kept on stock as a quantity, counted by scanning the EAN code; null leaves it untouched,
+    /// so clients that do not know the flag never switch it off.
+    /// </summary>
+    public bool? WithoutSerialNumbers { get; set; }
 }

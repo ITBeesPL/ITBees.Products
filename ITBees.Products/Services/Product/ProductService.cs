@@ -1,6 +1,7 @@
 ﻿using ITBees.Interfaces.Repository;
 using ITBees.Products.Controllers.Models.Product;
 using ITBees.Products.Entities;
+using ITBees.Products.Services.Stock;
 using ITBees.RestfulApiControllers.Exceptions;
 using ITBees.RestfulApiControllers.Models;
 using ITBees.UserManager.Interfaces;
@@ -10,18 +11,26 @@ namespace ITBees.Products.Services.Product;
 
 public class ProductService : IProductService
 {
+    private const int MaxEanLength = 50;
+
     private readonly IAspCurrentUserService _aspCurrentUserService;
     private readonly IWriteOnlyRepository<DbModels.Product> _productWoRepo;
     private readonly IReadOnlyRepository<DbModels.Product> _productRoRepo;
+    private readonly IReadOnlyRepository<SerializedProductOnStock> _stockRoRepo;
+    private readonly IReadOnlyRepository<ProductStockMovement> _movementRoRepo;
 
     public ProductService(
         IAspCurrentUserService aspCurrentUserService,
         IWriteOnlyRepository<DbModels.Product> productWoRepo,
-        IReadOnlyRepository<DbModels.Product> productRoRepo)
+        IReadOnlyRepository<DbModels.Product> productRoRepo,
+        IReadOnlyRepository<SerializedProductOnStock> stockRoRepo,
+        IReadOnlyRepository<ProductStockMovement> movementRoRepo)
     {
         _aspCurrentUserService = aspCurrentUserService;
         _productWoRepo = productWoRepo;
         _productRoRepo = productRoRepo;
+        _stockRoRepo = stockRoRepo;
+        _movementRoRepo = movementRoRepo;
     }
 
     public ProductVm Get(int productId)
@@ -52,6 +61,9 @@ public class ProductService : IProductService
             throw new FasApiErrorException(new FasApiErrorVm(message, StatusCodes.Status403Forbidden));  
         }
         
+        var ean = NormalizeEan(productIm.Ean);
+        ThrowIfEanTaken(ean, null);
+
         // Thumbnail, descriptions and EAN are optional in the request, but their columns are
         // not nullable - store an empty text instead of failing on a missing value.
         var newProduct = _productWoRepo.InsertData(new DbModels.Product()
@@ -66,7 +78,8 @@ public class ProductService : IProductService
             VatPercentageSell = productIm.VatPercentageSell,
             NetPriceBuy = productIm.NetPriceBuy,
             VatPercentageBuy = productIm.VatPercentageBuy,
-            Ean = productIm.Ean ?? string.Empty,
+            Ean = ean,
+            WithoutSerialNumbers = productIm.WithoutSerialNumbers,
             AddedByGuid = cu.CurrentUserGuid.Value,
             ProductImages = productIm.ProductImages?.Select(pi => new ProductImage()
             {
@@ -87,12 +100,25 @@ public class ProductService : IProductService
             throw new FasApiErrorException(new FasApiErrorVm(message, StatusCodes.Status403Forbidden));  
         }
         
-        var producer = _productRoRepo.GetData(x => x.Id == productUm.ProductId).FirstOrDefault();
-        if (producer == null)
+        var product = _productRoRepo.GetData(x => x.Id == productUm.ProductId, x => x.Producer).FirstOrDefault();
+        if (product == null)
         {
             throw new FasApiErrorException("Producer not found", 404);
         }
-        
+
+        // Only a changed code is checked - entries stored before the rule keep working.
+        var ean = NormalizeEan(productUm.Ean);
+        if (!string.Equals(ean, product.Ean, StringComparison.Ordinal))
+        {
+            ThrowIfEanTaken(ean, product.Id);
+        }
+
+        var withoutSerialNumbers = productUm.WithoutSerialNumbers ?? product.WithoutSerialNumbers;
+        if (withoutSerialNumbers != product.WithoutSerialNumbers)
+        {
+            ThrowIfStockKeptTheOtherWay(product, withoutSerialNumbers);
+        }
+
         // The images are loaded together with the product: replacing them below needs the
         // collection to exist (it is null otherwise) and the old rows to be tracked for removal.
         var updatedProduct = _productWoRepo.UpdateData(x => x.Id == productUm.ProductId, x =>
@@ -110,7 +136,8 @@ public class ProductService : IProductService
             x.VatPercentageSell = productUm.VatPercentageSell;
             x.NetPriceBuy = productUm.NetPriceBuy;
             x.VatPercentageBuy = productUm.VatPercentageBuy;
-            x.Ean = productUm.Ean ?? string.Empty;
+            x.Ean = ean;
+            x.WithoutSerialNumbers = withoutSerialNumbers;
             if (productUm.ProductImages != null)
             {
                 x.ProductImages.Clear();
@@ -137,7 +164,61 @@ public class ProductService : IProductService
         }
         
         var products = _productRoRepo.GetData(x => x.IsActive,x => x.Producer, x => x.ProductImages).ToList();
-        
+
         return new List<ProductVm>(products.Select(x => new ProductVm(x)));
+    }
+
+    /// <summary>
+    /// The code as a scanner reads it: without whitespace, an empty text when there is none
+    /// (the column is not nullable).
+    /// </summary>
+    private static string NormalizeEan(string? ean)
+    {
+        var code = string.Concat((ean ?? string.Empty).Where(c => !char.IsWhiteSpace(c)));
+        if (code.Length > MaxEanLength)
+        {
+            throw new FasApiErrorException($"Kod EAN może mieć najwyżej {MaxEanLength} znaków.", 400);
+        }
+
+        return code;
+    }
+
+    /// <summary>A scanned EAN has to point at exactly one catalogue entry - that is how pieces get counted.</summary>
+    private void ThrowIfEanTaken(string ean, int? ownProductId)
+    {
+        if (ean.Length == 0)
+        {
+            return;
+        }
+
+        var other = _productRoRepo.GetData(x => x.Ean == ean && x.Id != ownProductId, x => x.Producer)
+            .FirstOrDefault();
+        if (other != null)
+        {
+            throw new FasApiErrorException(
+                $"Kod EAN {ean} ma już pozycja katalogu „{StockBalances.ProductName(other)}”.", 400);
+        }
+    }
+
+    /// <summary>
+    /// A product is kept either item by item (serial numbers) or as a quantity - never both. Once
+    /// stock was received one way, switching would leave that stock unreadable.
+    /// </summary>
+    private void ThrowIfStockKeptTheOtherWay(DbModels.Product product, bool withoutSerialNumbers)
+    {
+        var name = StockBalances.ProductName(product);
+        if (withoutSerialNumbers && _stockRoRepo.HasData(x => x.ProductId == product.Id))
+        {
+            throw new FasApiErrorException(
+                $"„{name}” ma już w magazynie sztuki z numerami seryjnymi - nie może stać się produktem bez " +
+                "numerów seryjnych. Dodaj do katalogu osobną pozycję.", 400);
+        }
+
+        if (!withoutSerialNumbers && _movementRoRepo.HasData(x => x.ProductId == product.Id))
+        {
+            throw new FasApiErrorException(
+                $"„{name}” był już przyjmowany ilościowo (bez numerów seryjnych) - nie może teraz wymagać " +
+                "numerów seryjnych. Dodaj do katalogu osobną pozycję.", 400);
+        }
     }
 }

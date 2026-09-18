@@ -47,5 +47,28 @@ public class DbModelBuilder
             .WithMany(x => x.Items)
             .HasForeignKey(x => x.ProductDeliveryGuid)
             .OnDelete(DeleteBehavior.Restrict);
+
+        // Stock of the products kept without serial numbers: a ledger summed per product and
+        // warehouse. Like the serialized items, movements are only ever removed explicitly,
+        // together with the document that made them - never by a database cascade.
+        modelBuilder.Entity<ProductStockMovement>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => new { x.ProductId, x.WarehouseGuid });
+            entity.HasIndex(x => x.DocumentGuid);
+            entity.Property(x => x.DocumentName).HasMaxLength(200);
+            entity.HasOne(x => x.Product)
+                .WithMany()
+                .HasForeignKey(x => x.ProductId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.Warehouse)
+                .WithMany()
+                .HasForeignKey(x => x.WarehouseGuid)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.ProductDelivery)
+                .WithMany(x => x.StockMovements)
+                .HasForeignKey(x => x.ProductDeliveryGuid)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
     }
 }

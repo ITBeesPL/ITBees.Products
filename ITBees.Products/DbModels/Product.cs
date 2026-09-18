@@ -19,6 +19,15 @@ public class Product
     public decimal NetPriceBuy { get; set; }
     public int VatPercentageBuy { get; set; }
     public string Ean { get; set; }
+
+    /// <summary>
+    /// Kept on stock as a quantity per warehouse instead of one row per serial number - e.g.
+    /// cables, paper rolls or spare parts. Such pieces are counted by scanning the <see cref="Ean"/>
+    /// code on them and their stock is a sum of <see cref="Entities.ProductStockMovement"/> rows.
+    /// False (the default) keeps the product serialized, as every product was before this flag.
+    /// </summary>
+    public bool WithoutSerialNumbers { get; set; }
+
     public UserAccount AddedBy { get; set; }
     public Guid AddedByGuid { get; set; }
 }

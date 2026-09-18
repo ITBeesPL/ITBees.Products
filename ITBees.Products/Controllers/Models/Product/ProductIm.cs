@@ -17,4 +17,7 @@ public class ProductIm
     public int VatPercentageSell { get; set; }
     public decimal NetPriceBuy { get; set; }
     public int VatPercentageBuy { get; set; }
+
+    /// <summary>Kept on stock as a quantity, counted by scanning the EAN code - see DbModels.Product.</summary>
+    public bool WithoutSerialNumbers { get; set; }
 }

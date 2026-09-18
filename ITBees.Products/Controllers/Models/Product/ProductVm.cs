@@ -20,6 +20,7 @@ public class ProductVm
         NetPriceBuy = x.NetPriceBuy;
         VatPercentageBuy = x.VatPercentageBuy;
         Ean = x.Ean;
+        WithoutSerialNumbers = x.WithoutSerialNumbers;
         AddedByGuid = x.AddedByGuid;
 
     }
@@ -38,5 +39,9 @@ public class ProductVm
     public decimal NetPriceBuy { get; set; }
     public int VatPercentageBuy { get; set; }
     public string Ean { get; set; }
+
+    /// <summary>Kept on stock as a quantity, counted by scanning <see cref="Ean"/> - not item by item.</summary>
+    public bool WithoutSerialNumbers { get; set; }
+
     public Guid AddedByGuid { get; set; }
 }

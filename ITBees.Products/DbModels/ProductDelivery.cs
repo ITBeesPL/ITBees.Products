@@ -25,4 +25,10 @@ public class ProductDelivery
     public DateTime Created { get; set; }
     public Guid? CreatedByGuid { get; set; }
     public List<SerializedProductOnStock> Items { get; set; } = new();
+
+    /// <summary>
+    /// Pieces of products kept without serial numbers received in the batch - one movement per
+    /// product, stored and removed together with the delivery.
+    /// </summary>
+    public List<ProductStockMovement> StockMovements { get; set; } = new();
 }

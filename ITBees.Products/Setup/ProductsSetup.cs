@@ -13,8 +13,9 @@ public class ProductsSetup
 {
     /// <summary>
     /// Registers the services behind every controller of this package: producers, products,
-    /// warehouses, deliveries, serialized products on stock and warehouse labels. The entities
-    /// are mapped separately - see <see cref="DbModelBuilder.Register"/>.
+    /// warehouses, deliveries, serialized products on stock, the stock of products kept without
+    /// serial numbers and warehouse labels. The entities are mapped separately - see
+    /// <see cref="DbModelBuilder.Register"/>.
     /// </summary>
     /// <param name="settings">
     /// Pass <see cref="ProductsSettings.DeviceWarehouseUrl"/> to make the label QR codes open
@@ -32,6 +33,7 @@ public class ProductsSetup
         services.AddTransient<IWarehouseService, WarehouseService>();
         services.AddTransient<IProductDeliveryService, ProductDeliveryService>();
         services.AddTransient<ISerializedProductService, SerializedProductService>();
+        services.AddTransient<IProductStockService, ProductStockService>();
         services.AddTransient<IStockLabelService, StockLabelService>();
         services.AddSingleton<IStockLabelPdfGenerator, StockLabelPdfGenerator>();
     }

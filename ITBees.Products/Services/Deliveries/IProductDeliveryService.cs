@@ -21,13 +21,17 @@ public interface IProductDeliveryService
 
     /// <summary>
     /// Receives a purchase batch: stores the purchase data and every scanned item, giving each
-    /// item its own internal serial number (guid). All or nothing - a single rejected serial
-    /// number rejects the whole batch.
+    /// item its own internal serial number (guid), plus the counted pieces of products kept
+    /// without serial numbers. All or nothing - a single rejected serial number rejects the
+    /// whole batch.
     /// </summary>
     ProductDeliveryVm Create(ProductDeliveryIm productDeliveryIm);
 
     ProductDeliveryVm Update(ProductDeliveryUm productDeliveryUm);
 
-    /// <summary>Removes a delivery entered by mistake, together with its items.</summary>
+    /// <summary>
+    /// Removes a delivery entered by mistake, together with its items and counted pieces.
+    /// Refused once an item was handed over, or when the warehouse no longer holds the pieces.
+    /// </summary>
     void Delete(Guid guid);
 }

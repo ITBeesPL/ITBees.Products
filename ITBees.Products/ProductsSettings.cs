@@ -1,3 +1,5 @@
+using ITBees.Products.Services.Labels;
+
 namespace ITBees.Products;
 
 /// <summary>
@@ -23,6 +25,21 @@ public class ProductsSettings
     /// available in the device details the label's QR code leads to.
     /// </summary>
     public bool PrintPurchaseDateOnLabels { get; set; }
+
+    /// <summary>
+    /// Owner of the stocked devices printed at the top of every warehouse label, e.g.
+    /// "Octopark spółka z o.o." - broken into two lines when it has more than one word (three for a
+    /// long name), the first line bold. Polish letters are printed as such. Null or empty prints
+    /// no name.
+    /// </summary>
+    public string? LabelCompanyName { get; set; }
+
+    /// <summary>
+    /// Small pictogram printed next to <see cref="LabelCompanyName"/> - load it once at startup,
+    /// e.g. with <see cref="StockLabelLogo.FromEmbeddedResource"/>, so a broken drawing stops the
+    /// application at once instead of the first label print. Null prints no pictogram.
+    /// </summary>
+    public StockLabelLogo? LabelLogo { get; set; }
 
     /// <summary>Link to the device details page, or null when no address is configured.</summary>
     public string? BuildDeviceUrl(Guid deviceGuid)

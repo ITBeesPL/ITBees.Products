@@ -6,10 +6,11 @@ namespace ITBees.Products.Services.Labels.Pdf;
 
 /// <summary>
 /// Minimal PDF writer - just enough for warehouse labels: pages of an exact physical size,
-/// filled rectangles (QR modules) and text set in the standard Helvetica faces. Those fonts are
-/// built into every PDF viewer and printer driver, so nothing is embedded and no font or native
-/// library has to exist on the server (the API runs in a bare Linux container).
-/// Text is limited to printable ASCII. All coordinates are PDF points, origin bottom-left.
+/// filled rectangles (QR modules), vector paths (the company pictogram) and text set in the
+/// standard Helvetica faces. Those fonts are built into every PDF viewer and printer driver, so
+/// nothing is embedded and no font or native library has to exist on the server (the API runs in
+/// a bare Linux container). Text is limited to printable ASCII plus the Polish letters - see
+/// <see cref="PdfText"/>. All coordinates are PDF points, origin bottom-left.
 /// </summary>
 internal sealed class SimplePdfDocument
 {
@@ -21,7 +22,8 @@ internal sealed class SimplePdfDocument
     private const int FontRegularObject = 3;
     private const int FontBoldObject = 4;
     private const int InfoObject = 5;
-    private const int FirstPageObject = 6;
+    private const int EncodingObject = 6;
+    private const int FirstPageObject = 7;
 
     private readonly List<PdfPage> _pages = new();
 
@@ -64,14 +66,17 @@ internal sealed class SimplePdfDocument
         Write($"<< /Type /Pages /Kids [{kids}] /Count {_pages.Count} >>\nendobj\n");
 
         BeginObject(FontRegularObject);
-        Write("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n");
+        Write($"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding {EncodingObject} 0 R >>\nendobj\n");
 
         BeginObject(FontBoldObject);
-        Write("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj\n");
+        Write($"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding {EncodingObject} 0 R >>\nendobj\n");
 
         BeginObject(InfoObject);
-        Write($"<< /Title ({PdfText.Escape(title)}) /Producer (ITBees.Products) " +
+        Write($"<< /Title ({PdfText.EscapeAscii(title)}) /Producer (ITBees.Products) " +
               $"/CreationDate (D:{DateTime.UtcNow:yyyyMMddHHmmss}Z) >>\nendobj\n");
+
+        BeginObject(EncodingObject);
+        Write($"{PdfText.EncodingDictionary}\nendobj\n");
 
         for (var i = 0; i < _pages.Count; i++)
         {
@@ -129,6 +134,60 @@ internal enum PdfFont
     HelveticaBold
 }
 
+/// <summary>The two inks of a monochrome label.</summary>
+internal enum PdfPaint
+{
+    Black,
+    White
+}
+
+internal enum PdfLineCap
+{
+    Butt = 0,
+    Round = 1,
+    Square = 2
+}
+
+internal enum PdfLineJoin
+{
+    Miter = 0,
+    Round = 1,
+    Bevel = 2
+}
+
+internal enum PdfPathSegmentType
+{
+    MoveTo,
+    LineTo,
+    CurveTo,
+    Close
+}
+
+/// <summary>
+/// One step of a vector path in PDF points: MoveTo / LineTo use <see cref="X3"/>, <see cref="Y3"/>
+/// (the end point); CurveTo is a cubic Bezier with two control points; Close has no points.
+/// </summary>
+internal readonly record struct PdfPathSegment(
+    PdfPathSegmentType Type,
+    double X1 = 0, double Y1 = 0,
+    double X2 = 0, double Y2 = 0,
+    double X3 = 0, double Y3 = 0);
+
+/// <summary>How a path is painted: fill and/or stroke, each optional.</summary>
+internal sealed class PdfPathStyle
+{
+    public PdfPaint? Fill { get; init; }
+
+    /// <summary>Even-odd fill rule instead of nonzero winding - SVG "fill-rule: evenodd".</summary>
+    public bool EvenOdd { get; init; }
+
+    public PdfPaint? Stroke { get; init; }
+    public double StrokeWidth { get; init; } = 1;
+    public PdfLineCap LineCap { get; init; } = PdfLineCap.Butt;
+    public PdfLineJoin LineJoin { get; init; } = PdfLineJoin.Miter;
+    public double MiterLimit { get; init; } = 4;
+}
+
 internal sealed class PdfPage
 {
     public const string RegularFontName = "F1";
@@ -165,6 +224,83 @@ internal sealed class PdfPage
         }
     }
 
+    /// <summary>
+    /// Paints one path. The graphics state is saved and restored around it, so the colors and
+    /// line settings of the path never leak into what is drawn next.
+    /// </summary>
+    public void DrawPath(IReadOnlyCollection<PdfPathSegment> segments, PdfPathStyle style)
+    {
+        var fill = style.Fill;
+        var stroke = style.Stroke is not null && style.StrokeWidth > 0 ? style.Stroke : null;
+        if (segments.Count == 0 || (fill is null && stroke is null))
+        {
+            return;
+        }
+
+        _content.Append("q\n");
+        if (fill is not null)
+        {
+            _content.Append(fill == PdfPaint.White ? "1 g\n" : "0 g\n");
+        }
+
+        if (stroke is not null)
+        {
+            _content.Append(stroke == PdfPaint.White ? "1 G\n" : "0 G\n")
+                .Append(PdfText.Number(style.StrokeWidth)).Append(" w ")
+                .Append((int)style.LineCap).Append(" J ")
+                .Append((int)style.LineJoin).Append(" j ")
+                .Append(PdfText.Number(Math.Max(1, style.MiterLimit))).Append(" M\n");
+        }
+
+        foreach (var s in segments)
+        {
+            switch (s.Type)
+            {
+                case PdfPathSegmentType.MoveTo:
+                    AppendPoint(s.X3, s.Y3).Append("m\n");
+                    break;
+                case PdfPathSegmentType.LineTo:
+                    AppendPoint(s.X3, s.Y3).Append("l\n");
+                    break;
+                case PdfPathSegmentType.CurveTo:
+                    AppendPoint(s.X1, s.Y1);
+                    AppendPoint(s.X2, s.Y2);
+                    AppendPoint(s.X3, s.Y3).Append("c\n");
+                    break;
+                case PdfPathSegmentType.Close:
+                    _content.Append("h\n");
+                    break;
+            }
+        }
+
+        var paintOperator = (fill, stroke, style.EvenOdd) switch
+        {
+            (not null, not null, true) => "B*",
+            (not null, not null, false) => "B",
+            (not null, null, true) => "f*",
+            (not null, null, false) => "f",
+            _ => "S"
+        };
+        _content.Append(paintOperator).Append("\nQ\n");
+    }
+
+    /// <summary>
+    /// Saves the graphics state and limits painting to the rectangle (x, y = bottom-left corner)
+    /// until the matching <see cref="PopClip"/>.
+    /// </summary>
+    public void PushClipRectangle(double x, double y, double width, double height)
+    {
+        _content.Append("q\n");
+        AppendPoint(x, y);
+        AppendPoint(width, height).Append("re W n\n");
+    }
+
+    /// <summary>Restores the graphics state saved by <see cref="PushClipRectangle"/>.</summary>
+    public void PopClip()
+    {
+        _content.Append("Q\n");
+    }
+
     public void DrawText(PdfFont font, double size, double x, double baselineY, string text)
     {
         _content.Append("BT\n/")
@@ -175,33 +311,155 @@ internal sealed class PdfPage
     }
 
     public string GetContent() => _content.ToString();
+
+    private StringBuilder AppendPoint(double x, double y)
+    {
+        return _content.Append(PdfText.Number(x)).Append(' ').Append(PdfText.Number(y)).Append(' ');
+    }
 }
 
+/// <summary>
+/// Text encoding of the label fonts: WinAnsiEncoding (which already has Ó and ó) with the other
+/// Polish letters placed on the otherwise unused codes 128-143 through a /Differences array. The
+/// standard Helvetica faces carry glyphs under exactly these names, so no font is embedded.
+/// Anything else outside printable ASCII becomes '?'.
+/// </summary>
 internal static class PdfText
 {
+    private const int FirstPolishCode = 128;
+
+    /// <summary>Letter, its glyph name in the standard fonts and the letter whose width it shares.</summary>
+    private static readonly (char Letter, string GlyphName, char WidthOf)[] PolishLetters =
+    {
+        ('Ą', "Aogonek", 'A'), ('ą', "aogonek", 'a'),
+        ('Ć', "Cacute", 'C'), ('ć', "cacute", 'c'),
+        ('Ę', "Eogonek", 'E'), ('ę', "eogonek", 'e'),
+        ('Ł', "Lslash", 'L'), ('ł', "lslash", 'l'),
+        ('Ń', "Nacute", 'N'), ('ń', "nacute", 'n'),
+        ('Ś', "Sacute", 'S'), ('ś', "sacute", 's'),
+        ('Ź', "Zacute", 'Z'), ('ź', "zacute", 'z'),
+        ('Ż', "Zdotaccent", 'Z'), ('ż', "zdotaccent", 'z')
+    };
+
+    // WinAnsiEncoding codes of the two Polish letters it has natively.
+    private const byte WinAnsiOacuteUpper = 0xD3;
+    private const byte WinAnsiOacuteLower = 0xF3;
+
+    public static readonly string EncodingDictionary =
+        "<< /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [" + FirstPolishCode + " " +
+        string.Join(" ", PolishLetters.Select(x => "/" + x.GlyphName)) + "] >>";
+
     /// <summary>Invariant number formatting - a decimal comma would corrupt the file.</summary>
     public static string Number(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
 
-    /// <summary>Printable ASCII only; anything else (the standard fonts cannot show it) becomes '?'.</summary>
-    public static string Sanitize(string? text)
+    /// <summary>
+    /// Font encoding codes of the text; characters the label fonts cannot show become '?'. Line
+    /// breaks and other control characters count as unsupported too.
+    /// </summary>
+    public static byte[] Encode(string? text)
     {
         if (string.IsNullOrEmpty(text))
         {
-            return string.Empty;
+            return Array.Empty<byte>();
         }
 
-        var sanitized = new StringBuilder(text.Length);
-        foreach (var c in text)
+        var codes = new byte[text.Length];
+        for (var i = 0; i < text.Length; i++)
+        {
+            codes[i] = EncodeCharacter(text[i]);
+        }
+
+        return codes;
+    }
+
+    /// <summary>
+    /// ASCII character whose advance width equals the width of the glyph behind the code - the
+    /// Polish letters are exactly as wide as their base letters in the standard Helvetica faces.
+    /// </summary>
+    public static char WidthCharacter(byte code)
+    {
+        if (code is >= (byte)' ' and <= (byte)'~')
+        {
+            return (char)code;
+        }
+
+        if (code >= FirstPolishCode && code < FirstPolishCode + PolishLetters.Length)
+        {
+            return PolishLetters[code - FirstPolishCode].WidthOf;
+        }
+
+        return code switch
+        {
+            WinAnsiOacuteUpper => 'O',
+            WinAnsiOacuteLower => 'o',
+            _ => '?'
+        };
+    }
+
+    /// <summary>Encodes and escapes text for use inside a PDF literal string "( )" shown in a label font.</summary>
+    public static string Escape(string? text)
+    {
+        var escaped = new StringBuilder();
+        foreach (var code in Encode(text))
+        {
+            switch (code)
+            {
+                case (byte)'\\':
+                case (byte)'(':
+                case (byte)')':
+                    escaped.Append('\\').Append((char)code);
+                    break;
+                case > (byte)'~':
+                    // Octal escape keeps the content stream plain ASCII.
+                    escaped.Append('\\').Append(Convert.ToString(code, 8).PadLeft(3, '0'));
+                    break;
+                default:
+                    escaped.Append((char)code);
+                    break;
+            }
+        }
+
+        return escaped.ToString();
+    }
+
+    /// <summary>
+    /// Printable ASCII only, escaped for a PDF literal string - for document metadata, which does
+    /// not use the label font encoding.
+    /// </summary>
+    public static string EscapeAscii(string? text)
+    {
+        var sanitized = new StringBuilder();
+        foreach (var c in text ?? string.Empty)
         {
             sanitized.Append(c is >= ' ' and <= '~' ? c : '?');
         }
 
-        return sanitized.ToString();
+        return sanitized.ToString().Replace("\\", "\\\\").Replace("(", "\\(").Replace(")", "\\)");
     }
 
-    /// <summary>Sanitizes and escapes text for use inside a PDF literal string "( )".</summary>
-    public static string Escape(string? text)
+    private static byte EncodeCharacter(char c)
     {
-        return Sanitize(text).Replace("\\", "\\\\").Replace("(", "\\(").Replace(")", "\\)");
+        if (c is >= ' ' and <= '~')
+        {
+            return (byte)c;
+        }
+
+        switch (c)
+        {
+            case 'Ó':
+                return WinAnsiOacuteUpper;
+            case 'ó':
+                return WinAnsiOacuteLower;
+        }
+
+        for (var i = 0; i < PolishLetters.Length; i++)
+        {
+            if (PolishLetters[i].Letter == c)
+            {
+                return (byte)(FirstPolishCode + i);
+            }
+        }
+
+        return (byte)'?';
     }
 }

@@ -31,14 +31,23 @@ internal static class PdfFontMetrics
     /// <summary>Height of capital letters and digits, as a fraction of the font size.</summary>
     public const double CapHeight = 0.718;
 
-    /// <summary>Width of the text in points. Characters outside ASCII count as '?'.</summary>
+    /// <summary>
+    /// Height of the lowest descender (p, q, g, j, y) below the baseline, as a fraction of the
+    /// font size - the ogonek of ą and ę does not reach lower.
+    /// </summary>
+    public const double Descent = 0.207;
+
+    /// <summary>
+    /// Width of the text in points. Polish letters are as wide as their base letters; other
+    /// characters the label fonts cannot show count as '?', which is how they are printed.
+    /// </summary>
     public static double MeasureWidth(PdfFont font, double size, string text)
     {
         var widths = font == PdfFont.HelveticaBold ? HelveticaBold : Helvetica;
         var total = 0;
-        foreach (var c in PdfText.Sanitize(text))
+        foreach (var code in PdfText.Encode(text))
         {
-            total += widths[c - FirstCharacter];
+            total += widths[PdfText.WidthCharacter(code) - FirstCharacter];
         }
 
         return total * size / 1000.0;

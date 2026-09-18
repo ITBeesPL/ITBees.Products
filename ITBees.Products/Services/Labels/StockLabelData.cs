@@ -17,4 +17,16 @@ public class StockLabelData
 
     /// <summary>Text encoded in the QR code - see <see cref="ProductsSettings.BuildLabelQrContent"/>.</summary>
     public string QrContent { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Owner of the device, printed at the top of the text column (two or three lines, Polish
+    /// letters allowed); null or empty leaves it out. See <see cref="ProductsSettings.LabelCompanyName"/>.
+    /// </summary>
+    public string? CompanyName { get; set; }
+
+    /// <summary>
+    /// Pictogram printed next to the company name; null leaves it out. See
+    /// <see cref="ProductsSettings.LabelLogo"/>.
+    /// </summary>
+    public StockLabelLogo? Logo { get; set; }
 }

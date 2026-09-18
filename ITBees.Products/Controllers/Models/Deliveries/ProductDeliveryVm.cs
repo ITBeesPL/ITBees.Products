@@ -12,7 +12,10 @@ public class ProductDeliveryVm
     /// <param name="x">Delivery; its warehouse name is filled in when loaded with it.</param>
     /// <param name="itemsCount">Number of items, for lists that do not load the items.</param>
     /// <param name="items">Items in scanning order, or null when not loaded.</param>
-    public ProductDeliveryVm(ProductDelivery x, int itemsCount, List<SerializedProductVm>? items = null)
+    /// <param name="unitsCount">Pieces of products kept without serial numbers.</param>
+    /// <param name="quantityItems">Those pieces per product, or null when not loaded.</param>
+    public ProductDeliveryVm(ProductDelivery x, int itemsCount, List<SerializedProductVm>? items = null,
+        int unitsCount = 0, List<ProductDeliveryQuantityItemVm>? quantityItems = null)
     {
         Guid = x.Guid;
         PurchaseDate = x.PurchaseDate;
@@ -31,6 +34,8 @@ public class ProductDeliveryVm
         CreatedByGuid = x.CreatedByGuid;
         ItemsCount = itemsCount;
         Items = items;
+        UnitsCount = unitsCount;
+        QuantityItems = quantityItems;
     }
 
     public Guid Guid { get; set; }
@@ -48,8 +53,16 @@ public class ProductDeliveryVm
     public string? Notes { get; set; }
     public DateTime Created { get; set; }
     public Guid? CreatedByGuid { get; set; }
+
+    /// <summary>Serialized items (devices) received in the delivery.</summary>
     public int ItemsCount { get; set; }
 
     /// <summary>Items in scanning order; null in list results, which carry only the count.</summary>
     public List<SerializedProductVm>? Items { get; set; }
+
+    /// <summary>Pieces of products kept without serial numbers received in the delivery, all products together.</summary>
+    public int UnitsCount { get; set; }
+
+    /// <summary>Those pieces per product, in scanning order; null in list results.</summary>
+    public List<ProductDeliveryQuantityItemVm>? QuantityItems { get; set; }
 }

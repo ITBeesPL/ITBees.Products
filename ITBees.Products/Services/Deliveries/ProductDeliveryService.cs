@@ -2,6 +2,7 @@ using ITBees.Interfaces.Repository;
 using ITBees.Products.Controllers.Models.Deliveries;
 using ITBees.Products.Controllers.Models.Stock;
 using ITBees.Products.Entities;
+using ITBees.Products.Services.Stock;
 using ITBees.RestfulApiControllers.Exceptions;
 using ITBees.UserManager.Interfaces;
 
@@ -10,6 +11,7 @@ namespace ITBees.Products.Services.Deliveries;
 public class ProductDeliveryService : IProductDeliveryService
 {
     private const int MaxItemsPerDelivery = 500;
+    private const int MaxQuantityItemsPerDelivery = 200;
     private const int MaxSerialNumberLength = 200;
     private const int MaxWarrantyMonths = 240;
     private const int DefaultSellerSuggestions = 20;
@@ -20,6 +22,8 @@ public class ProductDeliveryService : IProductDeliveryService
     private readonly IWriteOnlyRepository<ProductDelivery> _deliveryWoRepo;
     private readonly IReadOnlyRepository<SerializedProductOnStock> _stockRoRepo;
     private readonly IWriteOnlyRepository<SerializedProductOnStock> _stockWoRepo;
+    private readonly IReadOnlyRepository<ProductStockMovement> _movementRoRepo;
+    private readonly IWriteOnlyRepository<ProductStockMovement> _movementWoRepo;
     private readonly IReadOnlyRepository<DbModels.Product> _productRoRepo;
     private readonly IReadOnlyRepository<Warehouse> _warehouseRoRepo;
     private readonly ProductsSettings _settings;
@@ -30,6 +34,8 @@ public class ProductDeliveryService : IProductDeliveryService
         IWriteOnlyRepository<ProductDelivery> deliveryWoRepo,
         IReadOnlyRepository<SerializedProductOnStock> stockRoRepo,
         IWriteOnlyRepository<SerializedProductOnStock> stockWoRepo,
+        IReadOnlyRepository<ProductStockMovement> movementRoRepo,
+        IWriteOnlyRepository<ProductStockMovement> movementWoRepo,
         IReadOnlyRepository<DbModels.Product> productRoRepo,
         IReadOnlyRepository<Warehouse> warehouseRoRepo,
         ProductsSettings settings)
@@ -39,6 +45,8 @@ public class ProductDeliveryService : IProductDeliveryService
         _deliveryWoRepo = deliveryWoRepo;
         _stockRoRepo = stockRoRepo;
         _stockWoRepo = stockWoRepo;
+        _movementRoRepo = movementRoRepo;
+        _movementWoRepo = movementWoRepo;
         _productRoRepo = productRoRepo;
         _warehouseRoRepo = warehouseRoRepo;
         _settings = settings;
@@ -62,7 +70,7 @@ public class ProductDeliveryService : IProductDeliveryService
         var warehouses = warehouseGuids?.Length > 0 ? warehouseGuids.Select(x => (Guid?)x).ToList() : null;
 
         // Items are loaded only to be counted - a page holds a few dozen deliveries at most.
-        return _deliveryRoRepo
+        var result = _deliveryRoRepo
             .GetDataPaginated(x =>
                     (warehouses == null || warehouses.Contains(x.WarehouseGuid)) &&
                     (search == null ||
@@ -70,9 +78,24 @@ public class ProductDeliveryService : IProductDeliveryService
                      x.SellerName!.ToLower().Contains(search) ||
                      x.SellerNip!.Contains(search) ||
                      x.Notes!.ToLower().Contains(search) ||
-                     x.Items.Any(i => i.SerialNumber.ToLower().Contains(search))),
-                sortOptions, x => x.Warehouse, x => x.Items)
-            .MapTo(x => new ProductDeliveryVm(x, x.Items?.Count ?? 0));
+                     x.Items.Any(i => i.SerialNumber.ToLower().Contains(search)) ||
+                     // Products kept without serial numbers: by name, or by the EAN scanned into the box.
+                     x.StockMovements.Any(m =>
+                         m.Product!.ShortDescription.ToLower().Contains(search) || m.Product!.Ean.Contains(search))),
+                sortOptions, x => x.Warehouse, x => x.Items);
+
+        // Pieces counted by quantity - summed by the database for the deliveries of this page.
+        var pageGuids = result.Data.Select(x => (Guid?)x.Guid).ToList();
+        var units = pageGuids.Count == 0
+            ? new Dictionary<Guid, int>()
+            : _movementRoRepo.GetDataQueryable(x => pageGuids.Contains(x.ProductDeliveryGuid))
+                .GroupBy(x => x.ProductDeliveryGuid)
+                .Select(x => new { DeliveryGuid = x.Key, Units = x.Sum(m => m.Quantity) })
+                .ToList()
+                .ToDictionary(x => x.DeliveryGuid!.Value, x => x.Units);
+
+        return result.MapTo(x =>
+            new ProductDeliveryVm(x, x.Items?.Count ?? 0, unitsCount: units.GetValueOrDefault(x.Guid)));
     }
 
     public List<ProductDeliverySellerVm> GetSellers(string? search, int? limit)
@@ -124,8 +147,15 @@ public class ProductDeliveryService : IProductDeliveryService
         ValidatePurchaseData(productDeliveryIm.PurchaseDate, productDeliveryIm.WarrantyMonths);
         var warehouse = GetActiveWarehouseOrThrow(productDeliveryIm.WarehouseGuid);
         var items = ValidateItems(productDeliveryIm.Items);
+        var quantityItems = ValidateQuantityItems(productDeliveryIm.QuantityItems);
+        if (items.Count == 0 && quantityItems.Count == 0)
+        {
+            throw new FasApiErrorException(
+                "Zeskanuj przynajmniej jedno urządzenie albo kod EAN produktu bez numerów seryjnych.", 400);
+        }
 
         var now = DateTime.Now;
+        var createdBy = _aspCurrentUserService.GetCurrentUserGuid();
         var delivery = new ProductDelivery
         {
             Guid = Guid.NewGuid(),
@@ -140,7 +170,7 @@ public class ProductDeliveryService : IProductDeliveryService
             WarehouseGuid = warehouse.Guid,
             Notes = TrimToNull(productDeliveryIm.Notes),
             Created = now,
-            CreatedByGuid = _aspCurrentUserService.GetCurrentUserGuid(),
+            CreatedByGuid = createdBy,
             // Only foreign keys are set on the items - attaching loaded products or the
             // warehouse to the graph would make the repository try to insert them again.
             Items = items.Select((item, index) => new SerializedProductOnStock
@@ -152,11 +182,22 @@ public class ProductDeliveryService : IProductDeliveryService
                 Received = now,
                 DeliveredToEndCustomer = false,
                 PositionInDelivery = index + 1
+            }).ToList(),
+            // The counted pieces are the stock itself - a movement into the warehouse per product.
+            StockMovements = quantityItems.Select((item, index) => new ProductStockMovement
+            {
+                ProductId = item.ProductId,
+                WarehouseGuid = warehouse.Guid,
+                Quantity = item.Quantity,
+                Type = ProductStockMovementType.Delivery,
+                Position = index + 1,
+                Created = now,
+                CreatedByGuid = createdBy
             }).ToList()
         };
 
-        // One insert of the whole graph = one transaction: either the delivery and all of
-        // its items are stored, or nothing is.
+        // One insert of the whole graph = one transaction: either the delivery with all of
+        // its items and counted pieces is stored, or nothing is.
         _deliveryWoRepo.InsertData(delivery);
 
         return LoadWithItems(delivery.Guid);
@@ -212,6 +253,23 @@ public class ProductDeliveryService : IProductDeliveryService
                 $"Nie można usunąć dostawy - {handedOver} szt. z niej wydano już do klienta.", 400);
         }
 
+        // Counted pieces are not told apart, so what matters is whether the warehouse still
+        // holds as many as the delivery brought in - not where "these" pieces went.
+        var movements = _movementRoRepo.GetData(x => x.ProductDeliveryGuid == guid).ToList();
+        var shortages = StockBalances.AfterRemoving(_movementRoRepo, movements);
+        if (shortages.Count > 0)
+        {
+            throw new FasApiErrorException(
+                "Nie można usunąć dostawy - część sztuk produktów bez numerów seryjnych z niej przesunięto już " +
+                $"do innego magazynu albo wydano: {StockBalances.Describe(shortages, _productRoRepo, _warehouseRoRepo)}.",
+                400);
+        }
+
+        if (movements.Count > 0)
+        {
+            _movementWoRepo.DeleteData(x => x.ProductDeliveryGuid == guid);
+        }
+
         _stockWoRepo.DeleteData(x => x.ProductDeliveryGuid == guid);
         _deliveryWoRepo.DeleteData(x => x.Guid == guid);
     }
@@ -232,7 +290,14 @@ public class ProductDeliveryService : IProductDeliveryService
             .Select(x => new SerializedProductVm(x, _settings))
             .ToList();
 
-        return new ProductDeliveryVm(delivery, items.Count, items);
+        var quantityItems = _movementRoRepo
+            .GetData(x => x.ProductDeliveryGuid == guid, x => x.Product!, x => x.Product!.Producer)
+            .OrderBy(x => x.Position)
+            .ThenBy(x => x.Id)
+            .Select(x => new ProductDeliveryQuantityItemVm(x))
+            .ToList();
+
+        return new ProductDeliveryVm(delivery, items.Count, items, quantityItems.Sum(x => x.Quantity), quantityItems);
     }
 
     private static void ValidatePurchaseData(DateTime purchaseDate, int warrantyMonths)
@@ -269,12 +334,13 @@ public class ProductDeliveryService : IProductDeliveryService
     /// <summary>
     /// Returns the items with trimmed serial numbers, in the original (scanning) order, or
     /// throws naming every offending serial number - the operator fixes the list in one go.
+    /// No items at all is fine here: a delivery may bring only products without serial numbers.
     /// </summary>
     private List<ProductDeliveryItemIm> ValidateItems(List<ProductDeliveryItemIm>? scannedItems)
     {
         if (scannedItems == null || scannedItems.Count == 0)
         {
-            throw new FasApiErrorException("Zeskanuj przynajmniej jedno urządzenie.", 400);
+            return new List<ProductDeliveryItemIm>();
         }
 
         if (scannedItems.Count > MaxItemsPerDelivery)
@@ -322,12 +388,21 @@ public class ProductDeliveryService : IProductDeliveryService
         }
 
         var productIds = items.Select(x => x.ProductId).Distinct().ToList();
-        var knownProductIds = _productRoRepo.GetData(x => productIds.Contains(x.Id)).Select(x => x.Id).ToHashSet();
-        var unknownProductIds = productIds.Where(x => !knownProductIds.Contains(x)).ToList();
+        var knownProducts = _productRoRepo.GetData(x => productIds.Contains(x.Id), x => x.Producer)
+            .ToDictionary(x => x.Id);
+        var unknownProductIds = productIds.Where(x => !knownProducts.ContainsKey(x)).ToList();
         if (unknownProductIds.Count > 0)
         {
             throw new FasApiErrorException(
                 $"Nie znaleziono produktu o identyfikatorze: {string.Join(", ", unknownProductIds)}.", 400);
+        }
+
+        var counted = items.FindIndex(x => knownProducts[x.ProductId].WithoutSerialNumbers);
+        if (counted >= 0)
+        {
+            throw new FasApiErrorException(
+                $"Pozycja {counted + 1}: produkt „{StockBalances.ProductName(knownProducts[items[counted].ProductId])}” " +
+                "nie ma numerów seryjnych - jego sztuki liczy się, skanując kod EAN.", 400);
         }
 
         // The same serial number may legitimately exist for two different products, so the
@@ -348,6 +423,71 @@ public class ProductDeliveryService : IProductDeliveryService
         }
 
         return items;
+    }
+
+    /// <summary>
+    /// Returns one line per product kept without serial numbers - lines of the same product added
+    /// up, in the order the products were first scanned - or throws with the reason.
+    /// </summary>
+    private List<ProductDeliveryQuantityItemIm> ValidateQuantityItems(List<ProductDeliveryQuantityItemIm>? countedItems)
+    {
+        if (countedItems == null || countedItems.Count == 0)
+        {
+            return new List<ProductDeliveryQuantityItemIm>();
+        }
+
+        if (countedItems.Count > MaxQuantityItemsPerDelivery)
+        {
+            throw new FasApiErrorException(
+                $"Jedna dostawa może zawierać najwyżej {MaxQuantityItemsPerDelivery} pozycji produktów bez numerów " +
+                "seryjnych - podziel ją na części.", 400);
+        }
+
+        for (var i = 0; i < countedItems.Count; i++)
+        {
+            if (countedItems[i] == null || countedItems[i].ProductId <= 0)
+            {
+                throw new FasApiErrorException($"Produkty bez numerów seryjnych, pozycja {i + 1}: wybierz produkt.", 400);
+            }
+
+            if (countedItems[i].Quantity < 1)
+            {
+                throw new FasApiErrorException(
+                    $"Produkty bez numerów seryjnych, pozycja {i + 1}: podaj liczbę sztuk - co najmniej 1.", 400);
+            }
+        }
+
+        var merged = countedItems
+            .GroupBy(x => x.ProductId)
+            .Select(x => (ProductId: x.Key, Quantity: x.Sum(item => (long)item.Quantity)))
+            .ToList();
+        if (merged.Any(x => x.Quantity > ProductStockService.MaxQuantityPerLine))
+        {
+            throw new FasApiErrorException(
+                $"Jedna dostawa może zawierać najwyżej {ProductStockService.MaxQuantityPerLine} szt. jednego produktu.",
+                400);
+        }
+
+        var productIds = merged.Select(x => x.ProductId).ToList();
+        var products = _productRoRepo.GetData(x => productIds.Contains(x.Id), x => x.Producer).ToDictionary(x => x.Id);
+        var unknownProductIds = productIds.Where(x => !products.ContainsKey(x)).ToList();
+        if (unknownProductIds.Count > 0)
+        {
+            throw new FasApiErrorException(
+                $"Nie znaleziono produktu o identyfikatorze: {string.Join(", ", unknownProductIds)}.", 400);
+        }
+
+        var serialized = merged.Select(x => products[x.ProductId]).FirstOrDefault(x => !x.WithoutSerialNumbers);
+        if (serialized != null)
+        {
+            throw new FasApiErrorException(
+                $"Produkt „{StockBalances.ProductName(serialized)}” ma numery seryjne - zeskanuj numer seryjny " +
+                "każdej sztuki zamiast liczyć je kodem EAN.", 400);
+        }
+
+        return merged
+            .Select(x => new ProductDeliveryQuantityItemIm { ProductId = x.ProductId, Quantity = (int)x.Quantity })
+            .ToList();
     }
 
     private static string? TrimToNull(string? value)
