@@ -11,13 +11,28 @@ internal readonly record struct SvgMatrix(double A, double B, double C, double D
     public static readonly SvgMatrix Identity = new(1, 0, 0, 1, 0, 0);
 
     private static readonly Regex TransformFunction = new(
-        @"(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)",
+        @"(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^()]*)\)",
         RegexOptions.CultureInvariant);
 
     public static SvgMatrix Translation(double x, double y) => new(1, 0, 0, 1, x, y);
 
     /// <summary>Scale factor applied to lengths such as the stroke width.</summary>
     public double AverageScale => Math.Sqrt(Math.Abs(A * D - B * C));
+
+    /// <summary>
+    /// Uniform scale, rotation, reflection and translation only - a stroke keeps one width in
+    /// every direction under such a transform.
+    /// </summary>
+    public bool IsSimilarity
+    {
+        get
+        {
+            var xLength = A * A + B * B;
+            var yLength = C * C + D * D;
+            var tolerance = 1e-9 * Math.Max(xLength, yLength);
+            return Math.Abs(A * C + B * D) <= tolerance && Math.Abs(xLength - yLength) <= tolerance;
+        }
+    }
 
     public (double X, double Y) Apply(double x, double y) => (A * x + C * y + E, B * x + D * y + F);
 
@@ -60,9 +75,20 @@ internal readonly record struct SvgMatrix(double A, double B, double C, double D
 
     private static SvgMatrix Function(string name, List<double> a, string transform)
     {
-        double Arg(int index) => index < a.Count
-            ? a[index]
-            : throw new FormatException($"The label pictogram has an invalid transform \"{transform}\".");
+        // Browsers ignore a transform with a wrong number of arguments - so it is rejected here.
+        var valid = name switch
+        {
+            "matrix" => a.Count == 6,
+            "translate" or "scale" => a.Count is 1 or 2,
+            "rotate" => a.Count is 1 or 3,
+            _ => a.Count == 1
+        };
+        if (!valid)
+        {
+            throw new FormatException($"The label pictogram has an invalid transform \"{transform}\".");
+        }
+
+        double Arg(int index) => a[index];
 
         switch (name)
         {
@@ -114,6 +140,9 @@ internal sealed class SvgPathBuilder
     // Control point distance of a cubic Bezier approximating a quarter of a circle.
     private const double Kappa = 0.5522847498307936;
 
+    // Logo coordinates beyond this are not a pictogram but a numeric accident.
+    private const double MaxCoordinate = 1e7;
+
     private readonly SvgMatrix _transform;
     private readonly List<PdfPathSegment> _segments = new();
     private bool _hasCurrentPoint;
@@ -136,7 +165,7 @@ internal sealed class SvgPathBuilder
 
     public void MoveTo(double x, double y)
     {
-        var (tx, ty) = _transform.Apply(x, y);
+        var (tx, ty) = Transform(x, y);
         _segments.Add(new PdfPathSegment(PdfPathSegmentType.MoveTo, X3: tx, Y3: ty));
         X = StartX = x;
         Y = StartY = y;
@@ -147,7 +176,7 @@ internal sealed class SvgPathBuilder
     public void LineTo(double x, double y)
     {
         EnsureSubpath();
-        var (tx, ty) = _transform.Apply(x, y);
+        var (tx, ty) = Transform(x, y);
         _segments.Add(new PdfPathSegment(PdfPathSegmentType.LineTo, X3: tx, Y3: ty));
         X = x;
         Y = y;
@@ -156,9 +185,9 @@ internal sealed class SvgPathBuilder
     public void CurveTo(double x1, double y1, double x2, double y2, double x, double y)
     {
         EnsureSubpath();
-        var (tx1, ty1) = _transform.Apply(x1, y1);
-        var (tx2, ty2) = _transform.Apply(x2, y2);
-        var (tx, ty) = _transform.Apply(x, y);
+        var (tx1, ty1) = Transform(x1, y1);
+        var (tx2, ty2) = Transform(x2, y2);
+        var (tx, ty) = Transform(x, y);
         _segments.Add(new PdfPathSegment(PdfPathSegmentType.CurveTo, tx1, ty1, tx2, ty2, tx, ty));
         X = x;
         Y = y;
@@ -308,6 +337,21 @@ internal sealed class SvgPathBuilder
         LineTo(x, y + ry);
         CurveTo(x, y + ry - ky, x + rx - kx, y, x + rx, y);
         Close();
+    }
+
+    /// <summary>
+    /// The point in logo coordinates - which must be a sane number: an overflowing arc or skew
+    /// would otherwise write NaN or Infinity into the PDF, which strict readers refuse.
+    /// </summary>
+    private (double X, double Y) Transform(double x, double y)
+    {
+        var (tx, ty) = _transform.Apply(x, y);
+        if (!double.IsFinite(tx) || !double.IsFinite(ty) || Math.Abs(tx) > MaxCoordinate || Math.Abs(ty) > MaxCoordinate)
+        {
+            throw new FormatException("The label pictogram has a point far outside the drawing (check arcs and transforms).");
+        }
+
+        return (tx, ty);
     }
 
     /// <summary>

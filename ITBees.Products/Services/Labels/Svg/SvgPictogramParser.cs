@@ -25,11 +25,20 @@ internal static class SvgPictogramParser
         "path", "rect", "circle", "ellipse", "line", "polyline", "polygon"
     };
 
+    // A pictogram is a few kilobytes; the limits only stop hostile input early.
+    private const int MaxSvgLength = 256 * 1024;
+    private const int MaxGroupDepth = 32;
+
     public static StockLabelLogo Parse(string svg)
     {
         if (string.IsNullOrWhiteSpace(svg))
         {
             throw new FormatException("The label pictogram SVG is empty.");
+        }
+
+        if (svg.Length > MaxSvgLength)
+        {
+            throw new FormatException($"The label pictogram SVG is larger than {MaxSvgLength / 1024} kB.");
         }
 
         XDocument document;
@@ -52,9 +61,18 @@ internal static class SvgPictogramParser
         }
 
         var (minX, minY, width, height) = ReadViewBox(root);
+
+        // The label always fits the whole viewBox into its box, keeping the proportions.
+        var aspectRatio = Attribute(root, "preserveAspectRatio")?.ToLowerInvariant() ?? string.Empty;
+        if (aspectRatio.Contains("none") || aspectRatio.Contains("slice"))
+        {
+            throw new FormatException(
+                $"The label pictogram uses preserveAspectRatio=\"{aspectRatio}\", which is not supported.");
+        }
+
         var shapes = new List<LogoShape>();
         VisitChildren(root, PaintState.Initial.Apply(ReadProperties(root)),
-            SvgMatrix.Translation(-minX, -minY), shapes);
+            SvgMatrix.Translation(-minX, -minY), shapes, 0);
 
         if (shapes.Count == 0)
         {
@@ -64,8 +82,14 @@ internal static class SvgPictogramParser
         return new StockLabelLogo(width, height, shapes);
     }
 
-    private static void VisitChildren(XElement parent, PaintState state, SvgMatrix transform, List<LogoShape> shapes)
+    private static void VisitChildren(XElement parent, PaintState state, SvgMatrix transform, List<LogoShape> shapes,
+        int depth)
     {
+        if (depth > MaxGroupDepth)
+        {
+            throw new FormatException($"The label pictogram nests groups deeper than {MaxGroupDepth} levels.");
+        }
+
         foreach (var element in parent.Elements())
         {
             // Editor data (Inkscape, Illustrator, RDF metadata) lives in other namespaces.
@@ -77,6 +101,15 @@ internal static class SvgPictogramParser
             var name = element.Name.LocalName;
             if (SkippedElements.Contains(name))
             {
+                // Definitions are never drawn by themselves, but a style sheet in them applies to
+                // the whole drawing in a browser.
+                if (element.Descendants().Any(x => IsSvgElement(x) && x.Name.LocalName == "style" &&
+                                                   !string.IsNullOrWhiteSpace(x.Value)))
+                {
+                    throw new FormatException(
+                        "The label pictogram uses a <style> sheet, which is not supported - use presentation attributes (fill, stroke ...).");
+                }
+
                 continue;
             }
 
@@ -87,7 +120,8 @@ internal static class SvgPictogramParser
             }
 
             var properties = ReadProperties(element);
-            if (properties.TryGetValue("display", out var display) && display == "none")
+            if (properties.TryGetValue("display", out var display) &&
+                display.Equals("none", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -99,7 +133,7 @@ internal static class SvgPictogramParser
 
             if (name == "g")
             {
-                VisitChildren(element, elementState, elementTransform, shapes);
+                VisitChildren(element, elementState, elementTransform, shapes, depth + 1);
                 continue;
             }
 
@@ -159,12 +193,26 @@ internal static class SvgPictogramParser
             return null;
         }
 
+        // The stroke is drawn with one width in every direction, which is what the browser does
+        // only under a uniform scale and rotation.
+        if (stroke != null && !transform.IsSimilarity)
+        {
+            throw new FormatException(
+                "The label pictogram strokes a shape under a non-uniform scale or skew, which is not supported.");
+        }
+
+        var strokeWidth = state.StrokeWidth * transform.AverageScale;
+        if (!double.IsFinite(strokeWidth) || strokeWidth > 1e7)
+        {
+            throw new FormatException("The label pictogram has a stroke too wide to draw.");
+        }
+
         return new LogoShape(path.Segments, new PdfPathStyle
         {
             Fill = fill,
             EvenOdd = state.EvenOdd,
             Stroke = stroke,
-            StrokeWidth = state.StrokeWidth * transform.AverageScale,
+            StrokeWidth = strokeWidth,
             LineCap = state.LineCap,
             LineJoin = state.LineJoin,
             MiterLimit = state.MiterLimit
@@ -187,6 +235,11 @@ internal static class SvgPictogramParser
         var ryText = Attribute(element, "ry");
         var rx = rxText != null ? SvgValues.ParseLength(rxText, "rx") : ryText != null ? SvgValues.ParseLength(ryText, "ry") : 0;
         var ry = ryText != null ? SvgValues.ParseLength(ryText, "ry") : rx;
+        if (rx < 0 || ry < 0)
+        {
+            throw new FormatException("The label pictogram has a rectangle with a negative corner radius.");
+        }
+
         path.AddRectangle(x, y, width, height, Math.Clamp(rx, 0, width / 2), Math.Clamp(ry, 0, height / 2));
     }
 
@@ -278,11 +331,42 @@ internal static class SvgPictogramParser
                 "The label pictogram uses CSS classes, which are not supported - use presentation attributes (fill, stroke ...).");
         }
 
-        foreach (var unsupported in new[] { "clip-path", "mask", "filter", "stroke-dasharray" })
+        foreach (var unsupported in new[]
+                 {
+                     "clip-path", "mask", "filter", "stroke-dasharray", "marker", "marker-start", "marker-mid",
+                     "marker-end", "vector-effect"
+                 })
         {
-            if (properties.TryGetValue(unsupported, out var value) && value != "none")
+            if (properties.TryGetValue(unsupported, out var value) &&
+                !value.Equals("none", StringComparison.OrdinalIgnoreCase))
             {
                 throw new FormatException($"The label pictogram uses {unsupported}, which is not supported.");
+            }
+        }
+
+        // Transforms act around the user space origin, as with the SVG 1.1 defaults.
+        if (properties.TryGetValue("transform-origin", out var origin) &&
+            !origin.Replace("px", string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).All(x => x == "0"))
+        {
+            throw new FormatException("The label pictogram uses transform-origin, which is not supported.");
+        }
+
+        if (properties.TryGetValue("transform-box", out var box) &&
+            !box.Equals("view-box", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new FormatException("The label pictogram uses transform-box, which is not supported.");
+        }
+
+        // The fill is always painted first, then the stroke over it.
+        if (properties.TryGetValue("paint-order", out var paintOrder))
+        {
+            var layers = paintOrder.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+            var strokeIndex = layers.IndexOf("stroke");
+            var fillIndex = layers.IndexOf("fill");
+            if (strokeIndex >= 0 && (fillIndex < 0 || strokeIndex < fillIndex))
+            {
+                throw new FormatException(
+                    "The label pictogram paints a stroke under the fill (paint-order), which is not supported.");
             }
         }
 
@@ -322,35 +406,47 @@ internal static class SvgPictogramParser
             SvgPaint.Black, false, 1, SvgPaint.None, 1, PdfLineCap.Butt, PdfLineJoin.Miter, 4, 1, 1,
             SvgPaint.Black, true);
 
+        /// <summary>
+        /// The element's own properties applied over the inherited ones. "inherit" and "unset"
+        /// keep the inherited value (these properties are inherited in SVG), "initial" restores the
+        /// default; keywords are case-insensitive; an unknown keyword is rejected rather than
+        /// guessed.
+        /// </summary>
         public PaintState Apply(IReadOnlyDictionary<string, string> p)
         {
             var state = this;
-            if (p.TryGetValue("fill", out var fill) && fill != "inherit")
+            if (Value(p, "fill") is { } fill)
             {
-                state = state with { Fill = SvgPaint.Parse(fill) };
+                state = state with { Fill = fill == "initial" ? SvgPaint.Black : SvgPaint.Parse(fill) };
             }
 
-            if (p.TryGetValue("fill-rule", out var fillRule) && fillRule != "inherit")
+            if (Keyword(p, "fill-rule", "nonzero", "nonzero", "evenodd") is { } fillRule)
             {
                 state = state with { EvenOdd = fillRule == "evenodd" };
             }
 
-            if (p.TryGetValue("fill-opacity", out var fillOpacity) && fillOpacity != "inherit")
+            if (Value(p, "fill-opacity") is { } fillOpacity)
             {
-                state = state with { FillOpacity = SvgValues.ParseOpacity(fillOpacity) };
+                state = state with { FillOpacity = fillOpacity == "initial" ? 1 : SvgValues.ParseOpacity(fillOpacity) };
             }
 
-            if (p.TryGetValue("stroke", out var stroke) && stroke != "inherit")
+            if (Value(p, "stroke") is { } stroke)
             {
-                state = state with { Stroke = SvgPaint.Parse(stroke) };
+                state = state with { Stroke = stroke == "initial" ? SvgPaint.None : SvgPaint.Parse(stroke) };
             }
 
-            if (p.TryGetValue("stroke-width", out var strokeWidth) && strokeWidth != "inherit")
+            if (Value(p, "stroke-width") is { } strokeWidth)
             {
-                state = state with { StrokeWidth = SvgValues.ParseLength(strokeWidth, "stroke-width") };
+                var width = strokeWidth == "initial" ? 1 : SvgValues.ParseLength(strokeWidth, "stroke-width");
+                if (width < 0)
+                {
+                    throw new FormatException($"The label pictogram has an invalid stroke-width \"{strokeWidth}\".");
+                }
+
+                state = state with { StrokeWidth = width };
             }
 
-            if (p.TryGetValue("stroke-linecap", out var lineCap) && lineCap != "inherit")
+            if (Keyword(p, "stroke-linecap", "butt", "butt", "round", "square") is { } lineCap)
             {
                 state = state with
                 {
@@ -363,7 +459,7 @@ internal static class SvgPictogramParser
                 };
             }
 
-            if (p.TryGetValue("stroke-linejoin", out var lineJoin) && lineJoin != "inherit")
+            if (Keyword(p, "stroke-linejoin", "miter", "miter", "round", "bevel") is { } lineJoin)
             {
                 state = state with
                 {
@@ -376,33 +472,81 @@ internal static class SvgPictogramParser
                 };
             }
 
-            if (p.TryGetValue("stroke-miterlimit", out var miterLimit) && miterLimit != "inherit")
+            if (Value(p, "stroke-miterlimit") is { } miterLimit)
             {
-                state = state with { MiterLimit = SvgValues.ParseLength(miterLimit, "stroke-miterlimit") };
+                state = state with
+                {
+                    MiterLimit = miterLimit == "initial" ? 4 : SvgValues.ParseLength(miterLimit, "stroke-miterlimit")
+                };
             }
 
-            if (p.TryGetValue("stroke-opacity", out var strokeOpacity) && strokeOpacity != "inherit")
+            if (Value(p, "stroke-opacity") is { } strokeOpacity)
             {
-                state = state with { StrokeOpacity = SvgValues.ParseOpacity(strokeOpacity) };
+                state = state with
+                {
+                    StrokeOpacity = strokeOpacity == "initial" ? 1 : SvgValues.ParseOpacity(strokeOpacity)
+                };
             }
 
             // Group opacity is not inherited in SVG, but it fades everything inside the group.
-            if (p.TryGetValue("opacity", out var opacity) && opacity != "inherit")
+            if (Value(p, "opacity") is { } opacity && opacity != "initial")
             {
                 state = state with { GroupOpacity = GroupOpacity * SvgValues.ParseOpacity(opacity) };
             }
 
-            if (p.TryGetValue("color", out var color) && color != "inherit")
+            // "color: currentColor" keeps the inherited color.
+            if (Value(p, "color") is { } color && color != "currentcolor")
             {
-                state = state with { Color = SvgPaint.Parse(color) };
+                state = state with { Color = color == "initial" ? SvgPaint.Black : SvgPaint.Parse(color) };
             }
 
-            if (p.TryGetValue("visibility", out var visibility) && visibility != "inherit")
+            if (Keyword(p, "visibility", "visible", "visible", "hidden", "collapse") is { } visibility)
             {
                 state = state with { Visible = visibility == "visible" };
             }
 
             return state;
+        }
+
+        /// <summary>
+        /// The property's value, with the CSS-wide keywords lower-cased; null when it is not set
+        /// or keeps the inherited value.
+        /// </summary>
+        private static string? Value(IReadOnlyDictionary<string, string> p, string name)
+        {
+            if (!p.TryGetValue(name, out var raw))
+            {
+                return null;
+            }
+
+            var value = raw.Trim();
+            var keyword = value.ToLowerInvariant();
+            if (keyword is "inherit" or "unset")
+            {
+                return null;
+            }
+
+            return keyword is "initial" or "currentcolor" ? keyword : value;
+        }
+
+        /// <summary>A keyword property: one of the allowed values (lower-case), "initial" mapped to its default.</summary>
+        private static string? Keyword(IReadOnlyDictionary<string, string> p, string name, string initial,
+            params string[] allowed)
+        {
+            var value = Value(p, name)?.ToLowerInvariant();
+            if (value == null)
+            {
+                return null;
+            }
+
+            if (value == "initial")
+            {
+                return initial;
+            }
+
+            return allowed.Contains(value)
+                ? value
+                : throw new FormatException($"The label pictogram has an invalid {name} \"{value}\".");
         }
 
         public PdfPaint? ResolveFill() => Resolve(Fill, FillOpacity);
@@ -429,7 +573,7 @@ internal readonly record struct SvgPaint(bool IsNone, bool IsCurrentColor, bool 
     public static readonly SvgPaint Black = new(false, false, false, 1);
 
     private static readonly Regex RgbFunction = new(
-        @"^rgba?\(\s*([^,\s)]+)[\s,]+([^,\s)]+)[\s,]+([^,\s)/]+)(?:[\s,/]+([^,\s)]+))?\s*\)$",
+        @"^rgba?\(\s*([^,\s)/]+)[\s,]+([^,\s)/]+)[\s,]+([^,\s)/]+)(?:\s*[,/]\s*([^,\s)/]+))?\s*\)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static SvgPaint Parse(string value)

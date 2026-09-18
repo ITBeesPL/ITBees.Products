@@ -35,9 +35,10 @@ public sealed class StockLabelLogo
     /// print in black only, so every color is printed either black or - when light - white, never
     /// gray; a paint less than half opaque is not printed. Title, desc, metadata, defs and elements
     /// of other XML namespaces (editor data) are skipped. Everything else - text, images, use,
-    /// gradients, CSS classes, clip paths, masks, filters, dashes - is rejected with a
-    /// <see cref="FormatException"/>, so a pictogram never prints differently from how it looks
-    /// in a browser.
+    /// gradients, style sheets, CSS classes, clip paths, masks, filters, markers, dashes, strokes
+    /// under a skew or non-uniform scale, transform-origin, paint-order with the stroke first,
+    /// unknown keywords - is rejected with a <see cref="FormatException"/>, so a pictogram never
+    /// prints differently from how it looks in a browser.
     /// </summary>
     /// <exception cref="FormatException">The markup is not a supported SVG drawing.</exception>
     public static StockLabelLogo FromSvg(string svg) => SvgPictogramParser.Parse(svg);
