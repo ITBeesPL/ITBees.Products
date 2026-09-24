@@ -37,8 +37,10 @@ Każdy produkt ma pola dla sklepu hosta (`ProductIm` / `ProductUm` / `ProductVm`
 | `IsPubliclyAvailable` | „publicznie dostępny” – host może pokazać produkt klientom i przyjąć zamówienie |
 | `OrderFulfillmentDays` | „termin realizacji zamówienia” w dniach roboczych, gdy produktu nie ma na stanie; `null` = brak |
 
-Cena brutto może różnić się od „netto + VAT” najwyżej o grosz (`ProductPrices.GrossTolerance`), żeby dało
-się ustawić „ładną” cenę (1999,00 zł przy 23% = 1625,20 netto); większa różnica = 400. Pominięta
+Cena brutto może różnić się od „netto + VAT” najwyżej o grosz (`ProductPrices.GrossTolerance`); większa różnica
+= 400. Nie każde brutto wychodzi z ceny netto w groszach: przy 23% 1999,00 zł wychodzi (1625,20 netto), a 1999,04 zł
+nie (1625,23 daje 1999,03, 1625,24 — 1999,05) — tolerancja je przepuści, ale faktura liczona od netto pokaże sąsiednią
+kwotę, więc sklep, któremu zależy na zgodności, podpowiada tylko osiągalne ceny (tak robi panel ClipCraze). Pominięta
 (`null`) wylicza się z netto i VAT – dlatego klient, który nie zna pola, przy każdej edycji ceny netto
 utrzymuje brutto w zgodzie. W `PUT /Product` brak `IsPubliclyAvailable` / `OrderFulfillmentDays`
 oznacza „zostaw bez zmian”, a `OrderFulfillmentDays = 0` czyści termin. Zaokrąglenia jak na fakturze:

@@ -8,9 +8,11 @@ namespace ITBees.Products;
 public static class ProductPrices
 {
     /// <summary>
-    /// How far a gross price may drift from the net price with VAT - one grosz, so that a "nice"
-    /// gross price (1999.00 at 23% = 1625.20 net) can be kept although no net price in grosze
-    /// gives it exactly.
+    /// How far a gross price may drift from the net price with VAT - one grosz. Not every gross price
+    /// comes out of a net price in grosze: at 23% 1999.00 does (1625.20 net), 1999.04 does not
+    /// (1625.23 gives 1999.03, 1625.24 gives 1999.05), and the tolerance still accepts it. An invoice
+    /// counted from the net price then shows the neighbouring amount - a shop that wants the two to
+    /// agree should offer only reachable gross prices.
     /// </summary>
     public const decimal GrossTolerance = 0.01m;
 

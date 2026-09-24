@@ -23,7 +23,7 @@ public class Product
     /// <summary>
     /// Gross sale price of one piece ("cena brutto") - what a consumer pays and what a public shop
     /// shows. Kept together with <see cref="NetPriceSell"/> and <see cref="VatPercentageSell"/>: it
-    /// may differ from the net price with VAT by at most one grosz (a "nice" price such as 1999.00),
+    /// may differ from the net price with VAT by at most one grosz (not every gross price comes out of a net price in grosze),
     /// see <see cref="ProductPrices"/>. Zero in rows stored before the column existed - read it
     /// through <see cref="ProductPrices.EffectiveGross"/>.
     /// </summary>
