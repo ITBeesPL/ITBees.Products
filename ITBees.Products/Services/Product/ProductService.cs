@@ -1,4 +1,5 @@
-﻿using ITBees.Interfaces.Repository;
+﻿using System.Globalization;
+using ITBees.Interfaces.Repository;
 using ITBees.Products.Controllers.Models.Product;
 using ITBees.Products.Entities;
 using ITBees.Products.Services.Stock;
@@ -12,6 +13,7 @@ namespace ITBees.Products.Services.Product;
 public class ProductService : IProductService
 {
     private const int MaxEanLength = 50;
+    private const int MaxOrderFulfillmentDays = 365;
 
     private readonly IAspCurrentUserService _aspCurrentUserService;
     private readonly IWriteOnlyRepository<DbModels.Product> _productWoRepo;
@@ -63,6 +65,8 @@ public class ProductService : IProductService
         
         var ean = NormalizeEan(productIm.Ean);
         ThrowIfEanTaken(ean, null);
+        var grossPrice = ValidatePrices(productIm.NetPriceSell, productIm.VatPercentageSell, productIm.GrossPriceSell);
+        var fulfillmentDays = ValidateFulfillmentDays(productIm.OrderFulfillmentDays);
 
         // Thumbnail, descriptions and EAN are optional in the request, but their columns are
         // not nullable - store an empty text instead of failing on a missing value.
@@ -76,6 +80,9 @@ public class ProductService : IProductService
             IsActive = true,
             NetPriceSell = productIm.NetPriceSell,
             VatPercentageSell = productIm.VatPercentageSell,
+            GrossPriceSell = grossPrice,
+            IsPubliclyAvailable = productIm.IsPubliclyAvailable,
+            OrderFulfillmentDays = fulfillmentDays,
             NetPriceBuy = productIm.NetPriceBuy,
             VatPercentageBuy = productIm.VatPercentageBuy,
             Ean = ean,
@@ -113,6 +120,13 @@ public class ProductService : IProductService
             ThrowIfEanTaken(ean, product.Id);
         }
 
+        var grossPrice = ValidatePrices(productUm.NetPriceSell, productUm.VatPercentageSell, productUm.GrossPriceSell);
+        // Null = "leave as it is" for clients that do not know the fields; 0 clears the lead time.
+        var fulfillmentDays = productUm.OrderFulfillmentDays == null
+            ? product.OrderFulfillmentDays
+            : ValidateFulfillmentDays(productUm.OrderFulfillmentDays);
+        var isPubliclyAvailable = productUm.IsPubliclyAvailable ?? product.IsPubliclyAvailable;
+
         var withoutSerialNumbers = productUm.WithoutSerialNumbers ?? product.WithoutSerialNumbers;
         if (withoutSerialNumbers != product.WithoutSerialNumbers)
         {
@@ -134,6 +148,9 @@ public class ProductService : IProductService
             x.LongDescription = productUm.LongDescription ?? string.Empty;
             x.NetPriceSell = productUm.NetPriceSell;
             x.VatPercentageSell = productUm.VatPercentageSell;
+            x.GrossPriceSell = grossPrice;
+            x.IsPubliclyAvailable = isPubliclyAvailable;
+            x.OrderFulfillmentDays = fulfillmentDays;
             x.NetPriceBuy = productUm.NetPriceBuy;
             x.VatPercentageBuy = productUm.VatPercentageBuy;
             x.Ean = ean;
@@ -167,6 +184,68 @@ public class ProductService : IProductService
 
         return new List<ProductVm>(products.Select(x => new ProductVm(x)));
     }
+
+    /// <summary>
+    /// Checks the sale price and returns the gross price to store: the given one when it agrees
+    /// with the net price and the VAT rate to within a grosz, the net price with VAT when none was
+    /// given (older clients) - so a shop never shows a gross price the invoice cannot reproduce.
+    /// </summary>
+    private static decimal ValidatePrices(decimal netPrice, int vatPercentage, decimal? grossPrice)
+    {
+        if (netPrice < 0)
+        {
+            throw new FasApiErrorException("Cena netto sprzedaży nie może być ujemna.", 400);
+        }
+
+        if (vatPercentage < 0 || vatPercentage > ProductPrices.MaxVatPercentage)
+        {
+            throw new FasApiErrorException(
+                $"Stawka VAT musi mieć od 0 do {ProductPrices.MaxVatPercentage}%.", 400);
+        }
+
+        var expected = ProductPrices.GrossFromNet(netPrice, vatPercentage);
+        if (grossPrice == null)
+        {
+            return expected;
+        }
+
+        if (grossPrice < 0)
+        {
+            throw new FasApiErrorException("Cena brutto nie może być ujemna.", 400);
+        }
+
+        var gross = ProductPrices.Round(grossPrice.Value);
+        if (!ProductPrices.GrossMatchesNet(gross, netPrice, vatPercentage))
+        {
+            throw new FasApiErrorException(
+                $"Cena brutto {Amount(gross)} nie zgadza się z ceną netto {Amount(netPrice)} i stawką VAT " +
+                $"{vatPercentage}% - wychodzi z nich {Amount(expected)} brutto.", 400);
+        }
+
+        return gross;
+    }
+
+    /// <summary>Lead time to store: null for none (missing or 0), otherwise 1 to 365 working days.</summary>
+    private static int? ValidateFulfillmentDays(int? days)
+    {
+        if (days == null || days == 0)
+        {
+            return null;
+        }
+
+        if (days < 0 || days > MaxOrderFulfillmentDays)
+        {
+            throw new FasApiErrorException(
+                $"Termin realizacji zamówienia podaj w dniach roboczych: od 1 do {MaxOrderFulfillmentDays} " +
+                "(0 - bez terminu).", 400);
+        }
+
+        return days;
+    }
+
+    /// <summary>"1625,20" - hosts may run with invariant globalization, so no culture is looked up.</summary>
+    private static string Amount(decimal value) =>
+        value.ToString("0.00", CultureInfo.InvariantCulture).Replace('.', ',');
 
     /// <summary>
     /// The code as a scanner reads it: without whitespace, an empty text when there is none

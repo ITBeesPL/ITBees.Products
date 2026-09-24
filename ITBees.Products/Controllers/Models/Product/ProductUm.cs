@@ -19,6 +19,21 @@ public class ProductUm
     public string? LongDescription { get; set; }
     public decimal NetPriceSell { get; set; }
     public int VatPercentageSell { get; set; }
+
+    /// <summary>
+    /// Gross sale price of one piece. Null = the net price with VAT, so a client that does not
+    /// know the field keeps the gross price in step with the net price it edits.
+    /// </summary>
+    public decimal? GrossPriceSell { get; set; }
+
+    /// <summary>"Publicznie dostępny"; null leaves it untouched, so older clients never switch it off.</summary>
+    public bool? IsPubliclyAvailable { get; set; }
+
+    /// <summary>
+    /// "Termin realizacji zamówienia" in working days when not on stock; null leaves it untouched,
+    /// 0 clears it.
+    /// </summary>
+    public int? OrderFulfillmentDays { get; set; }
     public decimal NetPriceBuy { get; set; }
     public int VatPercentageBuy { get; set; }
 

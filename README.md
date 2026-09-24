@@ -25,6 +25,26 @@ ITBees.Inpost / ITBees.ServerStatus): encje, serwisy i kontrolery
 
 Encje `SimCard` / `SimCardOperator` służą hostom, które wydają urządzenia z kartami SIM.
 
+## Sprzedaż: ceny, widoczność, termin realizacji
+
+Każdy produkt ma pola dla sklepu hosta (`ProductIm` / `ProductUm` / `ProductVm`):
+
+| Pole | Znaczenie |
+|---|---|
+| `NetPriceSell` | cena netto sprzedaży jednej sztuki |
+| `VatPercentageSell` | stawka VAT w procentach (0–100) |
+| `GrossPriceSell` | cena brutto – to, co widzi i płaci klient |
+| `IsPubliclyAvailable` | „publicznie dostępny” – host może pokazać produkt klientom i przyjąć zamówienie |
+| `OrderFulfillmentDays` | „termin realizacji zamówienia” w dniach roboczych, gdy produktu nie ma na stanie; `null` = brak |
+
+Cena brutto może różnić się od „netto + VAT” najwyżej o grosz (`ProductPrices.GrossTolerance`), żeby dało
+się ustawić „ładną” cenę (1999,00 zł przy 23% = 1625,20 netto); większa różnica = 400. Pominięta
+(`null`) wylicza się z netto i VAT – dlatego klient, który nie zna pola, przy każdej edycji ceny netto
+utrzymuje brutto w zgodzie. W `PUT /Product` brak `IsPubliclyAvailable` / `OrderFulfillmentDays`
+oznacza „zostaw bez zmian”, a `OrderFulfillmentDays = 0` czyści termin. Zaokrąglenia jak na fakturze:
+do grosza, połówki od zera (`ProductPrices.GrossFromNet` / `NetFromGross`). Biblioteka nie wystawia
+publicznej listy produktów – co i jak pokazać anonimowo, decyduje host (np. własny kontroler sklepu).
+
 ## Podłączenie w aplikacji hosta
 
 ```csharp
@@ -49,6 +69,18 @@ ITBees.Products.Setup.DbModelBuilder.Register(modelBuilder);
 Wymagania: generyczne repozytoria ITBees (`IReadOnlyRepository<>` / `IWriteOnlyRepository<>`),
 `IAspCurrentUserService` (ITBees.UserManager) i rola `PlatformOperator`. Host z jawną listą
 kontrolerów musi dopisać kontrolery z `ITBees.Products.Controllers` do swojej rejestracji.
+
+## Aktualizacja z 8.0.8
+
+Zmiany są addytywne; po podbiciu pakietu wygeneruj migrację – dojdą kolumny `Product.GrossPriceSell`,
+`Product.IsPubliclyAvailable` (domyślnie `false`) i `Product.OrderFulfillmentDays` (nullable).
+Istniejące wiersze mają `GrossPriceSell = 0`; `ProductVm` pokazuje dla nich netto + VAT, a w migracji
+można je od razu uzupełnić:
+
+```sql
+UPDATE Product SET GrossPriceSell = ROUND(NetPriceSell * (100 + VatPercentageSell) / 100, 2)
+WHERE GrossPriceSell = 0;
+```
 
 ## Aktualizacja z 8.0.2
 

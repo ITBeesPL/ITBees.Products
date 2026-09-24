@@ -17,6 +17,9 @@ public class ProductVm
         IsActive = x.IsActive;
         NetPriceSell = x.NetPriceSell;
         VatPercentageSell = x.VatPercentageSell;
+        GrossPriceSell = ProductPrices.EffectiveGross(x);
+        IsPubliclyAvailable = x.IsPubliclyAvailable;
+        OrderFulfillmentDays = x.OrderFulfillmentDays;
         NetPriceBuy = x.NetPriceBuy;
         VatPercentageBuy = x.VatPercentageBuy;
         Ean = x.Ean;
@@ -36,6 +39,16 @@ public class ProductVm
     public bool IsActive { get; set; }
     public decimal NetPriceSell { get; set; }
     public int VatPercentageSell { get; set; }
+
+    /// <summary>Gross sale price of one piece (for rows older than the field: the net price with VAT).</summary>
+    public decimal GrossPriceSell { get; set; }
+
+    /// <summary>"Publicznie dostępny" - shown to customers of the host's public shop.</summary>
+    public bool IsPubliclyAvailable { get; set; }
+
+    /// <summary>"Termin realizacji zamówienia" in working days when not on stock; null = none set.</summary>
+    public int? OrderFulfillmentDays { get; set; }
+
     public decimal NetPriceBuy { get; set; }
     public int VatPercentageBuy { get; set; }
     public string Ean { get; set; }
