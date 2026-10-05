@@ -4,7 +4,8 @@ Biblioteka dostarcza gotowy moduł dla paneli administracyjnych ITBees (wzorzec 
 ITBees.Inpost / ITBees.ServerStatus): encje, serwisy i kontrolery
 (`[Authorize(Roles = "PlatformOperator")]`) dla:
 
-- **katalogu** - producenci (`/Producer`, `/Producers`) i produkty (`/Product`, `/Products`),
+- **katalogu** - producenci (`/Producer`, `/Producers`), produkty i usługi (`/Product`, `/Products`) oraz grupy
+  produktów (`/ProductGroup` GET/POST/PUT/DELETE, `/ProductGroups`),
 - **magazynów** - `/Warehouse` (GET/POST/PUT/DELETE), `/Warehouses?isActive=`; magazyn, który był
   już używany, można tylko dezaktywować,
 - **dostaw** - `/ProductDelivery` (GET/POST/PUT/DELETE), `/ProductDeliveries` (lista stronicowana):
@@ -47,6 +48,32 @@ oznacza „zostaw bez zmian”, a `OrderFulfillmentDays = 0` czyści termin. Zao
 do grosza, połówki od zera (`ProductPrices.GrossFromNet` / `NetFromGross`). Biblioteka nie wystawia
 publicznej listy produktów – co i jak pokazać anonimowo, decyduje host (np. własny kontroler sklepu).
 
+## Usługi i abonamenty
+
+`Product.Kind` (`ProductKind`, po nazwie w JSON-ie): `Goods` (towar - domyślnie, także każdy wiersz sprzed tej
+kolumny) albo `Service` (usługa / abonament, np. licencja). Usługa:
+
+- nie ma stanu magazynowego - dostawy (`/ProductDelivery`) i przesunięcia ilościowe odmawiają jej z 400;
+  towaru, który był już przyjmowany do magazynu, nie da się zmienić w usługę,
+- nie musi mieć producenta (`ProducerId` = null); towar nadal go wymaga (400 bez producenta),
+- może mieć **okres ważności**: `ValidityPeriod` + `ValidityUnit` (`Day` / `Month` / `Year`, najwyżej 3660 dni,
+  120 miesięcy, 10 lat); `null` albo 0 = bezterminowo. Towar okresu nie ma (400), a usługa zmieniona w towar go traci.
+  `ProductVm.ValidityDescription` podaje okres po polsku („12 miesięcy”, „2 lata”), a `ProductValidity.ValidTo`
+  liczy koniec kupionej usługi (miesiąc i rok kończą się tego samego dnia miesiąca).
+
+Ceny netto / brutto / VAT działają tak samo jak dla towarów (sekcja wyżej).
+
+## Grupy produktów
+
+Produkt może należeć do dowolnej liczby grup (`ProductGroup`, łącznik `ProductInGroup`). Nazwa grupy jest unikalna
+(bez względu na wielkość liter) - host szuka grupy po nazwie, np. „Wykłady” to oferta pokazywana w jednej sekcji
+panelu. W `ProductIm` / `ProductUm` grupy podaje się jako `ProductGroupIds`; w `PUT /Product` brak listy = „zostaw
+bez zmian”, pusta lista = usuń ze wszystkich grup. `ProductVm.ProductGroups` zwraca `{ id, name }`.
+`DELETE /ProductGroup` usuwa grupę i przynależności, produkty zostają.
+
+`/Products` przyjmuje opcjonalnie `productGroupId`, `kind` i `includeInactive` (domyślnie tylko aktywne).
+`PUT /Product` z `IsActive = false` archiwizuje produkt, `true` go przywraca (`null` - bez zmian).
+
 ## Podłączenie w aplikacji hosta
 
 ```csharp
@@ -71,6 +98,21 @@ ITBees.Products.Setup.DbModelBuilder.Register(modelBuilder);
 Wymagania: generyczne repozytoria ITBees (`IReadOnlyRepository<>` / `IWriteOnlyRepository<>`),
 `IAspCurrentUserService` (ITBees.UserManager) i rola `PlatformOperator`. Host z jawną listą
 kontrolerów musi dopisać kontrolery z `ITBees.Products.Controllers` do swojej rejestracji.
+
+## Aktualizacja z 8.0.11
+
+Po podbiciu pakietu wygeneruj migrację - dojdą:
+
+- kolumny `Product.Kind` (0 = towar, więc istniejące wiersze zostają towarami), `Product.ValidityPeriod`,
+  `Product.ValidityUnit`,
+- `Product.ProducerId` staje się nullable, a klucz obcy do `Producer` jest odtwarzany z `RESTRICT` zamiast `CASCADE`
+  (producentów się dezaktywuje, nie usuwa - usunięcie producenta nie może zabrać jego produktów),
+- tabele `ProductGroup` (unikalny indeks na `Name`) i `ProductInGroup`.
+
+Zmiany w API klas: `Product.ProducerId`, `ProductIm/Um/Vm.ProducerId` są `int?`; `IProductService.GetAll` ma
+opcjonalne filtry; konstruktor `ProductService` przyjmuje dodatkowo `IReadOnlyRepository<Producer>` i
+`IReadOnlyRepository<ProductGroup>` (dotyczy tylko testów, które tworzą serwis ręcznie). Pakiet wymaga
+`ITBees.UserManager` od 8.0.406.
 
 ## Aktualizacja z 8.0.8
 

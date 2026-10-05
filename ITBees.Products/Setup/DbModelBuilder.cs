@@ -1,5 +1,6 @@
 using ITBees.Products.DbModels;
 using ITBees.Products.Entities;
+using ITBees.Products.Services.ProductGroups;
 using Microsoft.EntityFrameworkCore;
 
 namespace ITBees.Products.Setup;
@@ -19,6 +20,39 @@ public class DbModelBuilder
         modelBuilder.Entity<SimCard>().HasKey(x => x.Id);
         modelBuilder.Entity<SimCardOperator>().HasKey(x => x.Id);
         modelBuilder.Entity<SerializedProductOnStock>().HasKey(x => x.Id);
+
+        // A service may have no producer, so the relation is optional - and restricted like the
+        // ones below: producers are deactivated, never deleted together with their products.
+        modelBuilder.Entity<Product>()
+            .HasOne(x => x.Producer)
+            .WithMany()
+            .HasForeignKey(x => x.ProducerId)
+            .IsRequired(false)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // Groups ("Wykłady", "Akcesoria"...) - a product belongs to any number of them. Hosts look
+        // a group up by its name, so the name is unique. Memberships are plain links: they go
+        // together with the group or the product they join.
+        modelBuilder.Entity<ProductGroup>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Name).HasMaxLength(ProductGroupLimits.MaxNameLength).IsRequired();
+            entity.Property(x => x.Description).HasMaxLength(ProductGroupLimits.MaxDescriptionLength);
+            entity.HasIndex(x => x.Name).IsUnique();
+        });
+        modelBuilder.Entity<ProductInGroup>(entity =>
+        {
+            entity.HasKey(x => new { x.ProductId, x.ProductGroupId });
+            entity.HasIndex(x => x.ProductGroupId);
+            entity.HasOne(x => x.Product)
+                .WithMany(x => x.ProductGroups)
+                .HasForeignKey(x => x.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.ProductGroup)
+                .WithMany(x => x.Products)
+                .HasForeignKey(x => x.ProductGroupId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
 
         // Stock must never vanish as a side effect. By convention both relations would
         // cascade, so physically deleting the user account that once added a product would

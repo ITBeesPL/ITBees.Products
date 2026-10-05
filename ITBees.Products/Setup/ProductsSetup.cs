@@ -2,6 +2,7 @@ using ITBees.Products.Services.Deliveries;
 using ITBees.Products.Services.Labels;
 using ITBees.Products.Services.Producer;
 using ITBees.Products.Services.Product;
+using ITBees.Products.Services.ProductGroups;
 using ITBees.Products.Services.Stock;
 using ITBees.Products.Services.Warehouses;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,7 +13,7 @@ namespace ITBees.Products.Setup;
 public class ProductsSetup
 {
     /// <summary>
-    /// Registers the services behind every controller of this package: producers, products,
+    /// Registers the services behind every controller of this package: producers, products, product groups,
     /// warehouses, deliveries, serialized products on stock, the stock of products kept without
     /// serial numbers and warehouse labels. The entities are mapped separately - see
     /// <see cref="DbModelBuilder.Register"/>.
@@ -30,6 +31,7 @@ public class ProductsSetup
         services.TryAddTransient<IProducerService, ProducerService>();
         services.TryAddTransient<IProductService, ProductService>();
 
+        services.AddTransient<IProductGroupService, ProductGroupService>();
         services.AddTransient<IWarehouseService, WarehouseService>();
         services.AddTransient<IProductDeliveryService, ProductDeliveryService>();
         services.AddTransient<ISerializedProductService, SerializedProductService>();

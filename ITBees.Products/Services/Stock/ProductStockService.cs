@@ -177,6 +177,8 @@ public class ProductStockService : IProductStockService
                 $"Nie znaleziono produktu o identyfikatorze: {string.Join(", ", unknownProductIds)}.", 400);
         }
 
+        StockBalances.ThrowIfAnyService(products.Values);
+
         var serialized = products.Values.FirstOrDefault(x => !x.WithoutSerialNumbers);
         if (serialized != null)
         {

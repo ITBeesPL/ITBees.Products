@@ -1,13 +1,28 @@
-﻿namespace ITBees.Products.Controllers.Models.Product;
+﻿using ITBees.Products.Controllers.Models.ProductGroups;
+using ITBees.Products.Entities;
+
+namespace ITBees.Products.Controllers.Models.Product;
 
 public class ProductVm
 {
     public ProductVm(){}
 
-    public ProductVm(DbModels.Product x)
+    /// <param name="groups">
+    /// Groups the product belongs to; without them <see cref="ProductGroups"/> stays empty (the
+    /// membership rows do not carry the group names).
+    /// </param>
+    public ProductVm(DbModels.Product x, IEnumerable<ProductGroup>? groups = null)
     {
         Id = x.Id;
         ProducerId = x.ProducerId;
+        Kind = x.Kind;
+        ValidityPeriod = x.ValidityPeriod;
+        ValidityUnit = x.ValidityUnit;
+        ValidityDescription = ProductValidity.Describe(x);
+        ProductGroups = (groups ?? Enumerable.Empty<ProductGroup>())
+            .OrderBy(g => g.Name)
+            .Select(g => new ProductGroupRefVm { Id = g.Id, Name = g.Name })
+            .ToList();
         Producer = x.Producer == null ? null : new ProducerVm(x.Producer);
         ProductImages = x.ProductImages == null ? null : x.ProductImages.Select(y => new ProductImageVm(y)).ToList();
         ThumbnailUrl = x.ThumbnailUrl;
@@ -29,8 +44,22 @@ public class ProductVm
     }
     
     public int Id { get; set; }
-    public ProducerVm Producer { get; set; }
-    public int ProducerId { get; set; }
+    public ProducerVm? Producer { get; set; }
+
+    /// <summary>Null only for a service without a producer.</summary>
+    public int? ProducerId { get; set; }
+
+    public ProductKind Kind { get; set; }
+
+    /// <summary>Services: how long a bought service stays valid, in <see cref="ValidityUnit"/>s; null = no end date.</summary>
+    public int? ValidityPeriod { get; set; }
+
+    public ProductValidityUnit? ValidityUnit { get; set; }
+
+    /// <summary>The validity in Polish words, e.g. "12 miesięcy"; null when there is none.</summary>
+    public string? ValidityDescription { get; set; }
+
+    public List<ProductGroupRefVm> ProductGroups { get; set; } = new();
     public List<ProductImageVm> ProductImages { get; set; }
     public string ThumbnailUrl { get; set; }
     public string ShortDescription { get; set; }

@@ -20,19 +20,25 @@ public class ProductService : IProductService
     private readonly IReadOnlyRepository<DbModels.Product> _productRoRepo;
     private readonly IReadOnlyRepository<SerializedProductOnStock> _stockRoRepo;
     private readonly IReadOnlyRepository<ProductStockMovement> _movementRoRepo;
+    private readonly IReadOnlyRepository<Entities.Producer> _producerRoRepo;
+    private readonly IReadOnlyRepository<ProductGroup> _groupRoRepo;
 
     public ProductService(
         IAspCurrentUserService aspCurrentUserService,
         IWriteOnlyRepository<DbModels.Product> productWoRepo,
         IReadOnlyRepository<DbModels.Product> productRoRepo,
         IReadOnlyRepository<SerializedProductOnStock> stockRoRepo,
-        IReadOnlyRepository<ProductStockMovement> movementRoRepo)
+        IReadOnlyRepository<ProductStockMovement> movementRoRepo,
+        IReadOnlyRepository<Entities.Producer> producerRoRepo,
+        IReadOnlyRepository<ProductGroup> groupRoRepo)
     {
         _aspCurrentUserService = aspCurrentUserService;
         _productWoRepo = productWoRepo;
         _productRoRepo = productRoRepo;
         _stockRoRepo = stockRoRepo;
         _movementRoRepo = movementRoRepo;
+        _producerRoRepo = producerRoRepo;
+        _groupRoRepo = groupRoRepo;
     }
 
     public ProductVm Get(int productId)
@@ -43,14 +49,14 @@ public class ProductService : IProductService
             throw new FasApiErrorException(new FasApiErrorVm(message, StatusCodes.Status403Forbidden));  
         }
         
-        var product = _productRoRepo.GetData(x => x.Id == productId).FirstOrDefault();
-        
+        var product = _productRoRepo.GetData(x => x.Id == productId, x => x.ProductGroups).FirstOrDefault();
+
         if (product == null)
         {
             throw new FasApiErrorException("Product not found", 404);
         }
 
-        return new ProductVm(product);
+        return ToVm(product, GroupsById(new[] { product }));
     }
     
 
@@ -63,16 +69,23 @@ public class ProductService : IProductService
             throw new FasApiErrorException(new FasApiErrorVm(message, StatusCodes.Status403Forbidden));  
         }
         
+        var kind = ValidateKind(productIm.Kind);
+        var producerId = ValidateProducer(productIm.ProducerId, kind);
         var ean = NormalizeEan(productIm.Ean);
         ThrowIfEanTaken(ean, null);
         var grossPrice = ValidatePrices(productIm.NetPriceSell, productIm.VatPercentageSell, productIm.GrossPriceSell);
         var fulfillmentDays = ValidateFulfillmentDays(productIm.OrderFulfillmentDays);
+        var (validityPeriod, validityUnit) = ValidateValidity(kind, productIm.ValidityPeriod, productIm.ValidityUnit);
+        var groups = ValidateGroups(productIm.ProductGroupIds);
 
         // Thumbnail, descriptions and EAN are optional in the request, but their columns are
         // not nullable - store an empty text instead of failing on a missing value.
         var newProduct = _productWoRepo.InsertData(new DbModels.Product()
         {
-            ProducerId = productIm.ProducerId,
+            ProducerId = producerId,
+            Kind = kind,
+            ValidityPeriod = validityPeriod,
+            ValidityUnit = validityUnit,
             ThumbnailUrl = productIm.Thumbnail?.ImageUrl ?? string.Empty,
             ShortDescription = productIm.ShortDescription ?? string.Empty,
             LongDescription = productIm.LongDescription ?? string.Empty,
@@ -86,16 +99,17 @@ public class ProductService : IProductService
             NetPriceBuy = productIm.NetPriceBuy,
             VatPercentageBuy = productIm.VatPercentageBuy,
             Ean = ean,
-            WithoutSerialNumbers = productIm.WithoutSerialNumbers,
+            // A service is never on stock, so it is not counted in pieces either.
+            WithoutSerialNumbers = kind == ProductKind.Goods && productIm.WithoutSerialNumbers,
             AddedByGuid = cu.CurrentUserGuid.Value,
             ProductImages = productIm.ProductImages?.Select(pi => new ProductImage()
             {
                 ImageUrl = pi.ImageUrl,
-            }).ToList() ?? new List<ProductImage>()
-            
+            }).ToList() ?? new List<ProductImage>(),
+            ProductGroups = groups.Select(g => new ProductInGroup { ProductGroupId = g.Id }).ToList()
         });
 
-        return new ProductVm(newProduct);
+        return ToVm(newProduct, groups.ToDictionary(x => x.Id));
     }
     
     public ProductVm Update(ProductUm productUm)
@@ -110,8 +124,16 @@ public class ProductService : IProductService
         var product = _productRoRepo.GetData(x => x.Id == productUm.ProductId, x => x.Producer).FirstOrDefault();
         if (product == null)
         {
-            throw new FasApiErrorException("Producer not found", 404);
+            throw new FasApiErrorException("Product not found", 404);
         }
+
+        var kind = productUm.Kind == null ? product.Kind : ValidateKind(productUm.Kind.Value);
+        if (kind == ProductKind.Service && product.Kind != ProductKind.Service)
+        {
+            ThrowIfEverOnStock(product);
+        }
+
+        var producerId = ValidateProducer(productUm.ProducerId, kind);
 
         // Only a changed code is checked - entries stored before the rule keep working.
         var ean = NormalizeEan(productUm.Ean);
@@ -127,17 +149,30 @@ public class ProductService : IProductService
             : ValidateFulfillmentDays(productUm.OrderFulfillmentDays);
         var isPubliclyAvailable = productUm.IsPubliclyAvailable ?? product.IsPubliclyAvailable;
 
-        var withoutSerialNumbers = productUm.WithoutSerialNumbers ?? product.WithoutSerialNumbers;
-        if (withoutSerialNumbers != product.WithoutSerialNumbers)
+        // A service is never on stock, so it is not counted in pieces either.
+        var withoutSerialNumbers = kind == ProductKind.Goods &&
+                                   (productUm.WithoutSerialNumbers ?? product.WithoutSerialNumbers);
+        if (kind == ProductKind.Goods && withoutSerialNumbers != product.WithoutSerialNumbers)
         {
             ThrowIfStockKeptTheOtherWay(product, withoutSerialNumbers);
         }
+
+        // Null = "leave as it is"; goods have no validity, so a service turned into goods loses it.
+        var (validityPeriod, validityUnit) = productUm.ValidityPeriod == null
+            ? kind == ProductKind.Service ? (product.ValidityPeriod, product.ValidityUnit) : (null, null)
+            : ValidateValidity(kind, productUm.ValidityPeriod, productUm.ValidityUnit ?? product.ValidityUnit);
+        var groups = productUm.ProductGroupIds == null ? null : ValidateGroups(productUm.ProductGroupIds);
+        var isActive = productUm.IsActive ?? product.IsActive;
 
         // The images are loaded together with the product: replacing them below needs the
         // collection to exist (it is null otherwise) and the old rows to be tracked for removal.
         var updatedProduct = _productWoRepo.UpdateData(x => x.Id == productUm.ProductId, x =>
         {
-            x.ProducerId = productUm.ProducerId;
+            x.ProducerId = producerId;
+            x.Kind = kind;
+            x.ValidityPeriod = validityPeriod;
+            x.ValidityUnit = validityUnit;
+            x.IsActive = isActive;
             // A missing thumbnail means "leave it as it is", not "clear it".
             if (productUm.Thumbnail != null)
             {
@@ -166,23 +201,162 @@ public class ProductService : IProductService
                     });
                 }
             }
-        }, x => x.ProductImages).FirstOrDefault();
-        
-        return new ProductVm(updatedProduct);
+
+            if (groups != null)
+            {
+                // Only the difference is written: a membership removed and added back under the
+                // same key in one save would collide in the change tracker.
+                x.ProductGroups ??= new List<ProductInGroup>();
+                var wanted = groups.Select(g => g.Id).ToHashSet();
+                x.ProductGroups.RemoveAll(m => !wanted.Contains(m.ProductGroupId));
+                foreach (var groupId in wanted.Where(id => x.ProductGroups.All(m => m.ProductGroupId != id)))
+                {
+                    x.ProductGroups.Add(new ProductInGroup { ProductGroupId = groupId });
+                }
+            }
+        }, x => x.ProductImages, x => x.ProductGroups).First();
+
+        return ToVm(updatedProduct, GroupsById(new[] { updatedProduct }));
     }
 
-    public List<ProductVm> GetAll()
+    public List<ProductVm> GetAll(int? productGroupId = null, ProductKind? kind = null, bool includeInactive = false)
     {
         var cu = _aspCurrentUserService.GetCurrentSessionUser();
         if (!cu.IsAuthorized)
         {
             var message = "You don't have enought rights to get this data.";
-            throw new FasApiErrorException(new FasApiErrorVm(message, StatusCodes.Status403Forbidden));  
+            throw new FasApiErrorException(new FasApiErrorVm(message, StatusCodes.Status403Forbidden));
         }
-        
-        var products = _productRoRepo.GetData(x => x.IsActive,x => x.Producer, x => x.ProductImages).ToList();
 
-        return new List<ProductVm>(products.Select(x => new ProductVm(x)));
+        var products = _productRoRepo.GetData(x =>
+                    (includeInactive || x.IsActive) &&
+                    (kind == null || x.Kind == kind) &&
+                    (productGroupId == null || x.ProductGroups!.Any(m => m.ProductGroupId == productGroupId)),
+                x => x.Producer, x => x.ProductImages, x => x.ProductGroups)
+            .ToList();
+
+        var groups = GroupsById(products);
+        return products.Select(x => ToVm(x, groups)).ToList();
+    }
+
+    private static ProductVm ToVm(DbModels.Product product, IReadOnlyDictionary<int, ProductGroup> groups)
+    {
+        var own = (product.ProductGroups ?? new List<ProductInGroup>())
+            .Select(m => groups.GetValueOrDefault(m.ProductGroupId))
+            .OfType<ProductGroup>();
+        return new ProductVm(product, own);
+    }
+
+    /// <summary>The groups the given products belong to - the membership rows do not carry their names.</summary>
+    private Dictionary<int, ProductGroup> GroupsById(IEnumerable<DbModels.Product> products)
+    {
+        var ids = products
+            .SelectMany(x => x.ProductGroups ?? new List<ProductInGroup>())
+            .Select(x => x.ProductGroupId)
+            .Distinct()
+            .ToList();
+        return ids.Count == 0
+            ? new Dictionary<int, ProductGroup>()
+            : _groupRoRepo.GetData(x => ids.Contains(x.Id)).ToDictionary(x => x.Id);
+    }
+
+    private static ProductKind ValidateKind(ProductKind kind)
+    {
+        if (!Enum.IsDefined(kind))
+        {
+            throw new FasApiErrorException("Wybierz rodzaj: towar albo usługa.", 400);
+        }
+
+        return kind;
+    }
+
+    /// <summary>
+    /// The producer to store: required (and existing) for goods, optional for a service - null when
+    /// none was chosen (null or 0).
+    /// </summary>
+    private int? ValidateProducer(int? producerId, ProductKind kind)
+    {
+        if (producerId is null or 0)
+        {
+            if (kind == ProductKind.Goods)
+            {
+                throw new FasApiErrorException("Wybierz producenta towaru.", 400);
+            }
+
+            return null;
+        }
+
+        if (!_producerRoRepo.HasData(x => x.Id == producerId))
+        {
+            throw new FasApiErrorException("Nie znaleziono wybranego producenta.", 400);
+        }
+
+        return producerId;
+    }
+
+    /// <summary>
+    /// The validity to store: none when the period is missing or 0; otherwise only a service may
+    /// have one, with a unit and within the <see cref="ProductValidity"/> limits.
+    /// </summary>
+    private static (int? Period, ProductValidityUnit? Unit) ValidateValidity(ProductKind kind, int? period,
+        ProductValidityUnit? unit)
+    {
+        if (period is null or 0)
+        {
+            return (null, null);
+        }
+
+        if (kind != ProductKind.Service)
+        {
+            throw new FasApiErrorException("Okres ważności można ustawić tylko usłudze (abonamentowi).", 400);
+        }
+
+        if (unit == null || !Enum.IsDefined(unit.Value))
+        {
+            throw new FasApiErrorException("Wybierz jednostkę okresu ważności: dni, miesiące albo lata.", 400);
+        }
+
+        var max = ProductValidity.MaxPeriod(unit.Value);
+        if (period < 0 || period > max)
+        {
+            throw new FasApiErrorException(
+                $"Okres ważności może wynosić od 1 do {ProductValidity.Describe(max, unit.Value)} (0 - bez końca).",
+                400);
+        }
+
+        return (period, unit);
+    }
+
+    /// <summary>The existing groups with the given ids (each once) - or 400 naming the missing ones.</summary>
+    private List<ProductGroup> ValidateGroups(List<int>? productGroupIds)
+    {
+        var ids = (productGroupIds ?? new List<int>()).Distinct().ToList();
+        if (ids.Count == 0)
+        {
+            return new List<ProductGroup>();
+        }
+
+        var groups = _groupRoRepo.GetData(x => ids.Contains(x.Id)).ToList();
+        var missing = ids.Where(id => groups.All(g => g.Id != id)).ToList();
+        if (missing.Count > 0)
+        {
+            throw new FasApiErrorException(
+                $"Nie znaleziono grupy produktów o identyfikatorze: {string.Join(", ", missing)}.", 400);
+        }
+
+        return groups;
+    }
+
+    /// <summary>A service is never on stock - goods that were ever received cannot become one.</summary>
+    private void ThrowIfEverOnStock(DbModels.Product product)
+    {
+        if (_stockRoRepo.HasData(x => x.ProductId == product.Id) ||
+            _movementRoRepo.HasData(x => x.ProductId == product.Id))
+        {
+            throw new FasApiErrorException(
+                $"„{StockBalances.ProductName(product)}” był już przyjmowany do magazynu - nie może stać się " +
+                "usługą. Dodaj do katalogu osobną pozycję.", 400);
+        }
     }
 
     /// <summary>

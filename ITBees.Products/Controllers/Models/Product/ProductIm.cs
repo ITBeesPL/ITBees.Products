@@ -1,3 +1,5 @@
+using ITBees.Products.Entities;
+
 namespace ITBees.Products.Controllers.Models.Product;
 
 public class ProductIm
@@ -8,7 +10,25 @@ public class ProductIm
     public string? Ean { get; set; }
     public List<ProductImageIm>? ProductImages { get; set; }
     public ProductImageIm? Thumbnail { get; set; }
-    public int ProducerId { get; set; }
+
+    /// <summary>Required for goods; a service may have none (null or 0).</summary>
+    public int? ProducerId { get; set; }
+
+    /// <summary>Goods (the default) or a service / subscription, which is never on stock.</summary>
+    public ProductKind Kind { get; set; }
+
+    /// <summary>
+    /// Services only: how long a bought service stays valid, in <see cref="ValidityUnit"/>s;
+    /// null or 0 = no end date.
+    /// </summary>
+    public int? ValidityPeriod { get; set; }
+
+    /// <summary>Unit of <see cref="ValidityPeriod"/> - required together with it.</summary>
+    public ProductValidityUnit? ValidityUnit { get; set; }
+
+    /// <summary>Groups to put the product in (ProductGroup ids); null or empty = none.</summary>
+    public List<int>? ProductGroupIds { get; set; }
+
     public string? Model { get; set; }
     public string? DescriptionUrl { get; set; }
     public string ShortDescription { get; set; }

@@ -1,5 +1,6 @@
 using ITBees.Interfaces.Repository;
 using ITBees.Products.Entities;
+using ITBees.RestfulApiControllers.Exceptions;
 
 namespace ITBees.Products.Services.Stock;
 
@@ -82,6 +83,20 @@ internal static class StockBalances
             $"{products.GetValueOrDefault(x.Key.ProductId, $"produkt {x.Key.ProductId}")} w magazynie " +
             $"„{warehouses.GetValueOrDefault(x.Key.WarehouseGuid, "?")}”: jest {Math.Max(0, x.Available)} szt., " +
             $"potrzeba {x.Needed}"));
+    }
+
+    /// <summary>
+    /// A service (<see cref="ProductKind.Service"/>) has no stock - refuses the first one found among the
+    /// products a stock document names.
+    /// </summary>
+    public static void ThrowIfAnyService(IEnumerable<DbModels.Product> products)
+    {
+        var service = products.FirstOrDefault(x => x.Kind == ProductKind.Service);
+        if (service != null)
+        {
+            throw new FasApiErrorException(
+                $"„{ProductName(service)}” to usługa - usługi nie mają stanu magazynowego.", 400);
+        }
     }
 
     /// <summary>"Producer — name", the way the admin panel names a catalogue entry.</summary>

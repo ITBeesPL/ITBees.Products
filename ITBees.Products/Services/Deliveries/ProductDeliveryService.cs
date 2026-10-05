@@ -397,6 +397,8 @@ public class ProductDeliveryService : IProductDeliveryService
                 $"Nie znaleziono produktu o identyfikatorze: {string.Join(", ", unknownProductIds)}.", 400);
         }
 
+        StockBalances.ThrowIfAnyService(knownProducts.Values);
+
         var counted = items.FindIndex(x => knownProducts[x.ProductId].WithoutSerialNumbers);
         if (counted >= 0)
         {
@@ -476,6 +478,8 @@ public class ProductDeliveryService : IProductDeliveryService
             throw new FasApiErrorException(
                 $"Nie znaleziono produktu o identyfikatorze: {string.Join(", ", unknownProductIds)}.", 400);
         }
+
+        StockBalances.ThrowIfAnyService(products.Values);
 
         var serialized = merged.Select(x => products[x.ProductId]).FirstOrDefault(x => !x.WithoutSerialNumbers);
         if (serialized != null)

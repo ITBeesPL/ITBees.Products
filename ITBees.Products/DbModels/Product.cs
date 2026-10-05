@@ -6,8 +6,32 @@ namespace ITBees.Products.DbModels;
 public class Product
 {
     public int Id { get; set; }
-    public Producer Producer { get; set; }
-    public int ProducerId { get; set; }
+
+    /// <summary>
+    /// Maker of the goods. Required for <see cref="ProductKind.Goods"/>; a service may have none -
+    /// null only for services.
+    /// </summary>
+    public Producer? Producer { get; set; }
+    public int? ProducerId { get; set; }
+
+    /// <summary>
+    /// Goods (the default - every entry stored before the kinds existed) or a service / subscription,
+    /// which is never on stock.
+    /// </summary>
+    public ProductKind Kind { get; set; }
+
+    /// <summary>
+    /// How long a bought service stays valid, in <see cref="ValidityUnit"/>s - e.g. 12 months of a
+    /// licence. Null for goods and for services without an end date. See <see cref="ProductValidity"/>.
+    /// </summary>
+    public int? ValidityPeriod { get; set; }
+
+    /// <summary>Unit of <see cref="ValidityPeriod"/>; set exactly when the period is.</summary>
+    public ProductValidityUnit? ValidityUnit { get; set; }
+
+    /// <summary>Groups the entry belongs to, e.g. "Wykłady" - any number of them.</summary>
+    public List<ProductInGroup>? ProductGroups { get; set; }
+
     public List<ProductImage> ProductImages { get; set; }
     public string ThumbnailUrl { get; set; }
     public string ShortDescription { get; set; }
