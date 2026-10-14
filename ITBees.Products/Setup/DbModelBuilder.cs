@@ -54,6 +54,20 @@ public class DbModelBuilder
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        // Trial products taken by customers - one row per product and customer; the unique index is
+        // what refuses a second claim of the same trial, also from two requests at once. Products are
+        // archived, never deleted, so a used trial keeps its product.
+        modelBuilder.Entity<ProductTrialUse>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => new { x.ProductId, x.CustomerGuid }).IsUnique();
+            entity.HasIndex(x => x.CustomerGuid);
+            entity.HasOne(x => x.Product)
+                .WithMany()
+                .HasForeignKey(x => x.ProductId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
         // Stock must never vanish as a side effect. By convention both relations would
         // cascade, so physically deleting the user account that once added a product would
         // silently take the product and every item of it on stock along.

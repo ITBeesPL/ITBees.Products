@@ -63,6 +63,32 @@ kolumny) albo `Service` (usługa / abonament, np. licencja). Usługa:
 
 Ceny netto / brutto / VAT działają tak samo jak dla towarów (sekcja wyżej).
 
+## Produkty próbne (trial)
+
+Produkt za 0 zł to **wersja próbna** (`ProductTrial.IsTrial`, `ProductVm.IsTrial`): host wydaje go bez płatności
+(bez Stripe'a ani innego operatora) i każdy klient może go wziąć **tylko raz**. Kto wziął który trial, pamięta
+`IProductTrialService` (tabela `ProductTrialUse`, unikalny indeks na parze produkt + klient). Klientem jest to, czemu
+host sprzedaje - firma, szkoła, konto użytkownika; biblioteka zapisuje tylko jego guid.
+
+- `TryClaim(productId, customerGuid, usedByGuid)` - zapisuje wzięcie trialu; `false`, gdy klient już go wziął, także
+  gdy drugie żądanie zrobiło to w tej samej chwili (decyduje unikalny indeks). 404 dla brakującego produktu, 400 dla
+  produktu z ceną.
+- `GetUsedTrialProductIds(customerGuid)` / `HasUsedTrial(...)` - żeby ukryć albo wyszarzyć wykorzystane triale.
+- `Release(productId, customerGuid)` - oddaje trial: gdy aktywacja po `TryClaim` się nie udała, albo gdy operator
+  chce dać klientowi trial jeszcze raz.
+
+Kolejność po stronie hosta: `TryClaim` → aktywacja usługi (od razu, bez płatności) → przy wyjątku `Release`.
+
+```csharp
+if (ProductTrial.IsTrial(product))
+{
+    if (!_productTrialService.TryClaim(product.Id, customerGuid, currentUserGuid))
+        throw new FasApiErrorException("Wersja próbna została już wykorzystana.", 409);
+    try { ActivateNow(product); }
+    catch { _productTrialService.Release(product.Id, customerGuid); throw; }
+}
+```
+
 ## Grupy produktów
 
 Produkt może należeć do dowolnej liczby grup (`ProductGroup`, łącznik `ProductInGroup`). Nazwa grupy jest unikalna
@@ -98,6 +124,12 @@ ITBees.Products.Setup.DbModelBuilder.Register(modelBuilder);
 Wymagania: generyczne repozytoria ITBees (`IReadOnlyRepository<>` / `IWriteOnlyRepository<>`),
 `IAspCurrentUserService` (ITBees.UserManager) i rola `PlatformOperator`. Host z jawną listą
 kontrolerów musi dopisać kontrolery z `ITBees.Products.Controllers` do swojej rejestracji.
+
+## Aktualizacja z 8.0.12
+
+Zmiany są addytywne; po podbiciu pakietu wygeneruj migrację - dojdzie tabela `ProductTrialUse` (unikalny indeks
+`ProductId` + `CustomerGuid`, klucz obcy do `Product` z `RESTRICT`). `ProductVm` ma nowe pole `IsTrial`, a
+`ProductsSetup.Register` rejestruje `IProductTrialService`.
 
 ## Aktualizacja z 8.0.11
 

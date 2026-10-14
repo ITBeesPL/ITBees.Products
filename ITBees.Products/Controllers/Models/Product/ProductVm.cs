@@ -33,6 +33,7 @@ public class ProductVm
         NetPriceSell = x.NetPriceSell;
         VatPercentageSell = x.VatPercentageSell;
         GrossPriceSell = ProductPrices.EffectiveGross(x);
+        IsTrial = ProductTrial.IsTrial(x);
         IsPubliclyAvailable = x.IsPubliclyAvailable;
         OrderFulfillmentDays = x.OrderFulfillmentDays;
         NetPriceBuy = x.NetPriceBuy;
@@ -71,6 +72,12 @@ public class ProductVm
 
     /// <summary>Gross sale price of one piece (for rows older than the field: the net price with VAT).</summary>
     public decimal GrossPriceSell { get; set; }
+
+    /// <summary>
+    /// The product costs nothing - a trial the host gives away without a payment, once per customer
+    /// (<see cref="ProductTrial"/>).
+    /// </summary>
+    public bool IsTrial { get; set; }
 
     /// <summary>"Publicznie dostępny" - shown to customers of the host's public shop.</summary>
     public bool IsPubliclyAvailable { get; set; }
